@@ -1,0 +1,373 @@
+/* app chrome (--side/--bg/--fg/--mut/--acc) and terminals (--tbg/--tfg) are themed separately; --ui = interface size */
+:root {
+  --side: #141518; --bg: #1c1d21; --fg: #e6e7ea; --mut: #8b8e97; --acc: #5b8cff;
+  --tbg: #1b1d23; --tfg: #d6d8de; --ui: 1;
+  --hover: color-mix(in srgb, var(--fg) 7%, transparent);
+  --edge: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+/* interface size: zoom the chrome only, never the terminals (xterm measures its own font) */
+.side-head, #groups, .side-foot, .brand, .winctl, .sp-inner, .empty-card, #menu, .pbar, .find { zoom: var(--ui); }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--side); color: var(--fg);
+  font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+body { display: flex; flex-direction: column; }
+svg { display: block; flex: none; }
+/* every icon sits exactly in the middle of its button */
+button:has(> svg:only-child) { display: inline-grid; place-items: center; line-height: 0; }
+/* thin scrollbars in the theme colors (also inside the terminals) */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 6px; background-clip: padding-box;
+  background-color: color-mix(in srgb, var(--fg) 18%, transparent); }
+::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--fg) 30%, transparent); }
+button { background: none; border: 0; color: var(--mut); cursor: pointer; font: inherit; padding: 2px 6px; border-radius: 6px;
+  transition: background .12s, color .12s; }
+button:hover { color: var(--fg); background: var(--hover); }
+.icon-btn { width: 28px; height: 28px; padding: 0; display: grid; place-items: center; border-radius: 7px; }
+/* inline rename field */
+aside input { flex: 1; min-width: 0; height: 24px; background: var(--bg); border: 1px solid var(--acc); color: var(--fg);
+  font: inherit; border-radius: 6px; padding: 0 6px; outline: none; }
+
+/* title bar (the window is frameless) */
+#titlebar { flex: none; height: calc(40px * var(--ui)); display: flex; user-select: none; }
+.brand { flex: 1; display: flex; align-items: center; gap: 9px; padding-left: 16px; font-weight: 600; }
+.logo { pointer-events: none; width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; color: #fff;
+  font-size: 11px; font-weight: 700; background: linear-gradient(135deg, var(--acc), color-mix(in srgb, var(--acc) 55%, #000)); }
+.winctl { display: flex; }
+.winctl button { width: 46px; height: 40px; padding: 0; border-radius: 0; display: grid; place-items: center; }
+.winctl button.close:hover { background: #e81123; color: #fff; }
+/* full screen: the title bar hides and slides back in when the mouse touches the top edge */
+:root.fullscreen #titlebar { position: fixed; inset: 0 0 auto 0; z-index: 61; background: var(--side);
+  box-shadow: 0 4px 16px #0006; transform: translateY(-100%); transition: transform .15s; }
+:root.fullscreen #titlebar.reveal, :root.fullscreen #titlebar:hover { transform: none; }
+
+#app { flex: 1; display: flex; min-height: 0; }
+/* sidebar collapsed: gone; auto-hide: out of the flow, slides in over the terminals at the left edge */
+#sidezone { display: none; }
+:root.side-collapsed #side-gutter, :root.side-auto #side-gutter { display: none; }
+/* mini sidebar: a narrow rail with only the terminals' icons (status dot, color), groups as thin lines */
+:root.side-collapsed aside { width: 72px; }
+:root.side-collapsed .side-head { justify-content: center; padding: 4px 0 6px; }
+:root.side-collapsed .side-head > span:first-child, :root.side-collapsed #undo, :root.side-collapsed #newgroup, :root.side-collapsed #showall { display: none; }
+:root.side-collapsed #groups { padding: 0 6px 8px; }
+.ginit { display: none; }
+/* mini: a group shows as the capital first letter of its name (in the group color when it has one) */
+:root.side-collapsed .ghead { flex-direction: column; justify-content: center; gap: 4px; height: auto; min-height: 26px; margin: 6px 0 2px; padding: 3px 0; }
+:root.side-collapsed .ghead > * { display: none; }
+:root.side-collapsed .ghead > .ginit { display: grid; place-items: center; width: 26px; height: 20px; border-radius: 6px;
+  font-size: 11px; font-weight: 700; color: var(--gc, var(--mut)); background: color-mix(in srgb, var(--gc, var(--mut)) 16%, transparent); }
+:root.side-collapsed .sess { position: relative; justify-content: center; height: 38px; padding: 0; }
+:root.side-collapsed .sess .sname, :root.side-collapsed .sess button { display: none; }
+:root.side-collapsed .sess .dot { position: absolute; top: 5px; right: 6px; }
+:root.side-collapsed .sess .picon { width: 22px; height: 22px; }
+:root.side-collapsed .side-foot { flex-direction: column; align-items: center; }
+:root.side-auto #sidezone { display: block; position: fixed; left: 0; top: 0; bottom: 0; width: 6px; z-index: 29; }
+:root.side-auto aside { position: fixed; left: 0; top: calc(40px * var(--ui)); bottom: 0; z-index: 30; background: var(--side);
+  box-shadow: 4px 0 24px #0006; transform: translateX(-100%); transition: transform .15s; }
+:root.fullscreen.side-auto aside { top: 0; }
+:root.side-auto #sidezone:hover + aside, :root.side-auto aside:hover { transform: none; }
+:root.side-collapsed main, :root.side-auto main { border-left: 0; border-top-left-radius: 0; }
+
+/* sidebar */
+aside { width: var(--side-w, 240px); flex: none; display: flex; flex-direction: column; min-height: 0; user-select: none; }
+.side-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 8px 6px 16px;
+  color: var(--mut); font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
+#groups { flex: 1; overflow: auto; padding: 0 8px 8px; }
+.side-foot { display: flex; justify-content: flex-end; gap: 2px; padding: 8px; border-top: 1px solid var(--edge); }
+.side-foot .icon-btn { width: 34px; height: 34px; border-radius: 8px; }
+/* sidebar header/footer buttons: near full text color, accent on hover (the muted grey was too faint) */
+.side-foot .icon-btn, .side-head .icon-btn:not(:disabled) { color: color-mix(in srgb, var(--fg) 80%, transparent); }
+.side-foot .icon-btn:hover, .side-head .icon-btn:not(:disabled):hover { color: var(--acc); }
+.ghead.has { cursor: pointer; }
+.side-head > span:last-child { display: flex; gap: 2px; }
+.icon-btn:disabled { opacity: .3; cursor: default; background: none; }
+.gdot { width: 8px; height: 8px; flex: none; margin-right: 6px; border-radius: 50%; }
+.sess[style*="--sc"] { box-shadow: inset 3px 0 0 var(--sc); }
+/* a terminal's (or its group's) color as a bar along the top of its pane */
+.pane::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; z-index: 4; background: var(--pc, transparent); }
+.swatches { display: grid; grid-template-columns: repeat(9, 22px); gap: 6px; padding: 6px; }
+#menu .swatches button { width: 22px; height: 22px; padding: 0; border-radius: 50%; background: var(--c); border: 2px solid transparent; }
+#menu .swatches button.on { border-color: var(--fg); }
+#menu .swatches button.none { background: none; border: 1px dashed var(--mut); display: grid; place-items: center; }
+#menu .swatches button.none.on { border-style: solid; border-color: var(--fg); }
+/* reopen handle while the sidebar is collapsed */
+#sideopen { display: none; position: absolute; left: 8px; bottom: 8px; z-index: 8; width: 34px; height: 34px;
+  background: var(--side); border: 1px solid var(--edge); box-shadow: 0 2px 8px #0005; zoom: var(--ui); }
+/* attention: blinking row in the sidebar, pulsing border around the pane */
+.attn .dot { background: #f59e0b; }
+#groups .sess.attn { background: color-mix(in srgb, #f59e0b 18%, transparent); box-shadow: inset 3px 0 0 #f59e0b;
+  color: var(--fg); animation: attn-row 1s ease-in-out 5; }
+.sfront { display: flex; color: #f59e0b; opacity: .8; }
+@keyframes attn-row { 50% { background: color-mix(in srgb, #f59e0b 40%, transparent); } }
+.pane.attn { animation: attn-pane .5s ease-in-out 4; }
+@keyframes attn-pane { 50% { border-color: #f59e0b; box-shadow: inset 0 0 0 2px #f59e0b; } }
+/* multi-select */
+.sess.selected { background: color-mix(in srgb, var(--acc) 22%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acc) 60%, transparent); }
+#selbar { display: flex; align-items: center; gap: 2px; margin: 0 8px 6px; padding: 3px 3px 3px 10px; border-radius: 8px;
+  font-size: 12px; color: var(--fg); background: color-mix(in srgb, var(--acc) 14%, transparent); zoom: var(--ui); }
+#selbar[hidden] { display: none; }
+#selbar span { flex: 1; white-space: nowrap; }
+#selbar button { width: 26px; height: 26px; padding: 0; display: grid; place-items: center; color: color-mix(in srgb, var(--fg) 80%, transparent); }
+:root.side-collapsed #selbar { flex-direction: column; margin: 0 6px 6px; padding: 3px; }
+:root.side-collapsed #selbar span { font-size: 11px; }
+/* drop position while reordering in the sidebar */
+:is(.group, .sess)[data-drop=before] { box-shadow: inset 0 2px 0 var(--acc); }
+:is(.group, .sess)[data-drop=after] { box-shadow: inset 0 -2px 0 var(--acc); }
+.glock { display: grid; place-items: center; color: var(--mut); padding: 0 4px; }
+.ghead:hover .glock { display: none; } /* the unlock button takes its place */
+
+.group { border-radius: 8px; margin: 0 0 2px calc(var(--d, 0) * 14px); } /* a subgroup is indented under its parent */
+:root.side-collapsed .group { margin-left: 0; }
+.group.drop { background: color-mix(in srgb, var(--acc) 15%, transparent); }
+.ghead { display: flex; align-items: center; gap: 2px; height: 30px; padding: 0 4px; border-radius: 7px; font-weight: 600; font-size: 12.5px; }
+.ghead:hover { background: var(--hover); }
+.caret { width: 20px; height: 20px; flex: none; display: grid; place-items: center; color: var(--mut); cursor: pointer;
+  transform: rotate(90deg); transition: transform .15s; }
+.collapsed .caret { transform: none; }
+.collapsed .sessions { display: none; }
+.gname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.count { color: var(--mut); font-weight: 400; font-size: 11px; padding-right: 6px; }
+.gacts { display: none; }
+.ghead:hover .gacts { display: flex; }
+.ghead:hover .count { display: none; }
+.gacts button { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; color: color-mix(in srgb, var(--fg) 75%, transparent); }
+.gacts button:hover { color: var(--acc); }
+/* the lock button shows the state (closed + accent = locked), like a toggle */
+.gacts button.on { color: var(--acc); }
+/* mini: a group's buttons appear as a 2x2 grid under its letter while hovering */
+:root.side-collapsed .ghead:hover > .gacts { display: grid; grid-template-columns: repeat(2, 24px); gap: 2px; }
+
+.sess { display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 4px 0 28px; border-radius: 7px; cursor: pointer;
+  color: color-mix(in srgb, var(--fg) 80%, transparent); }
+.sess:hover { background: var(--hover); }
+.sess.visible { color: var(--fg); }
+/* terminals that are not in the window: dimmed, italic name, so you can tell at a glance what is shown */
+.sess:not(.visible) .sname { opacity: .6; font-style: italic; }
+.sess:not(.visible) .picon { opacity: .5; }
+.sess.active { background: color-mix(in srgb, var(--acc) 18%, transparent); color: var(--fg); }
+.sname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess button { width: 22px; height: 22px; padding: 0; display: grid; place-items: center; opacity: 0; }
+.sess:hover button, .sess button.armed { opacity: 1; }
+button.armed { color: #fff; background: #e5484d; }
+.sess.confirm { background: color-mix(in srgb, #e5484d 16%, transparent); }
+.dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: color-mix(in srgb, var(--mut) 55%, transparent); }
+.running .dot { background: #3fb950; }
+.unread .dot { background: var(--acc); box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc) 25%, transparent); }
+.exited .dot { background: #e5484d; }
+
+#side-gutter { flex: none; width: 6px; margin: 0 -3px; z-index: 2; position: relative; cursor: col-resize; }
+#side-gutter::after { content: ""; position: absolute; inset: 0 2px; border-radius: 2px; transition: background .12s; }
+#side-gutter:hover::after { background: color-mix(in srgb, var(--acc) 55%, transparent); }
+
+/* terminal area: a rounded card next to the sidebar */
+main { flex: 1; position: relative; min-width: 0; overflow: hidden; background: var(--bg);
+  border-top-left-radius: 12px; border-top: 1px solid var(--edge); border-left: 1px solid var(--edge); }
+:root.fullscreen main { border-top: 0; border-top-left-radius: 0; }
+#view { position: absolute; inset: 0; display: flex; padding: 6px; }
+#view.drop { outline: 2px dashed var(--acc); outline-offset: -8px; }
+.split { display: flex; min-width: 0; min-height: 0; }
+.split.row { flex-direction: row; }
+.split.col { flex-direction: column; }
+/* 1 px between panes; an invisible wider strip (::before) keeps the divider easy to grab */
+.gutter { flex: none; position: relative; }
+.row > .gutter { width: 1px; cursor: col-resize; }
+.col > .gutter { height: 1px; cursor: row-resize; }
+.gutter::before { content: ""; position: absolute; z-index: 7; border-radius: 3px; transition: background .12s; }
+.row > .gutter::before { inset: 0 -4px; }
+.col > .gutter::before { inset: -4px 0; }
+.gutter:hover::before { background: color-mix(in srgb, var(--acc) 45%, transparent); }
+body.dragging { user-select: none; }
+body.dragging.row { cursor: col-resize; }
+body.dragging.col { cursor: row-resize; }
+body.dragging .term { pointer-events: none; }
+
+.pane { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--tbg);
+  border: 1px solid var(--edge); border-radius: 8px; transition: border-color .12s, box-shadow .12s; }
+.pane:hover { border-color: color-mix(in srgb, var(--acc) 40%, var(--edge)); }
+/* inset ring: with 1 px between panes an outer ring or glow would cover the neighbour */
+.pane.active { border-color: var(--acc); box-shadow: inset 0 0 0 2px var(--acc); }
+.term { position: absolute; inset: 8px 6px 6px 10px; }
+/* translucent inline title bar floating over the terminal */
+.pbar { position: absolute; top: 6px; right: 10px; z-index: 5; display: flex; align-items: center; gap: 1px; padding: 2px;
+  border-radius: 8px; border: 1px solid color-mix(in srgb, var(--tfg) 12%, transparent);
+  background: color-mix(in srgb, var(--tbg) 55%, transparent); backdrop-filter: blur(8px) saturate(140%);
+  color: var(--tfg); font-size: 12px; opacity: .55; transition: opacity .15s; }
+.pane:hover .pbar, .pane.active .pbar { opacity: 1; }
+.pbar span { display: flex; align-items: center; gap: 6px; padding: 0 6px; font-weight: 500; }
+.picon { display: block; flex: none; }
+.pbar button { width: 24px; height: 22px; padding: 0; display: grid; place-items: center; color: color-mix(in srgb, var(--tfg) 65%, transparent); }
+.pbar button:hover { color: var(--tfg); background: color-mix(in srgb, var(--tfg) 12%, transparent); }
+/* find box (Ctrl+Shift+F), top left over the terminal, styled like the title bar */
+.find { position: absolute; top: 6px; left: 10px; z-index: 6; display: flex; align-items: center; gap: 1px; padding: 2px;
+  border-radius: 8px; border: 1px solid color-mix(in srgb, var(--tfg) 12%, transparent);
+  background: color-mix(in srgb, var(--tbg) 85%, transparent); backdrop-filter: blur(8px); color: var(--tfg); }
+.find[hidden] { display: none; }
+.find input { width: 200px; height: 22px; padding: 0 6px; border: 0; outline: none; background: none; color: inherit; font: inherit; }
+.find button { width: 24px; height: 22px; padding: 0; color: color-mix(in srgb, var(--tfg) 65%, transparent); }
+.find button:hover { color: var(--tfg); background: color-mix(in srgb, var(--tfg) 12%, transparent); }
+/* a file from Explorer is being dropped on this terminal */
+.pane.drop { border-color: var(--acc); box-shadow: inset 0 0 0 2px var(--acc); }
+body.dnd, body.dnd * { cursor: grabbing !important; }
+.pbar button[data-split], .pbar button[data-max] { display: none; }
+.pane:hover .pbar button[data-max] { display: grid; }
+#view.single .pbar button[data-max] { display: none; }
+/* go to a terminal (Ctrl+Shift+P): a search box at the top, like VS Code's quick open */
+#switcher { position: fixed; z-index: 40; top: 56px; left: 50%; transform: translateX(-50%); width: min(560px, 90vw);
+  padding: 6px; border-radius: 12px; zoom: var(--ui); background: color-mix(in srgb, var(--side) 92%, var(--fg));
+  border: 1px solid color-mix(in srgb, var(--fg) 12%, transparent); box-shadow: 0 16px 48px #0008, 0 2px 8px #0005; }
+#switcher[hidden] { display: none; }
+#switcher input { width: 100%; height: 36px; padding: 0 12px; border-radius: 8px; outline: none; font: inherit; font-size: 14px;
+  color: var(--fg); background: var(--bg); border: 1px solid var(--acc); }
+.sw-list { max-height: 360px; overflow: auto; margin-top: 6px; }
+.sw-list button { display: flex; align-items: center; gap: 10px; width: 100%; height: 34px; padding: 0 10px; text-align: left; color: var(--fg); }
+.sw-list button.on { background: color-mix(in srgb, var(--acc) 22%, transparent); }
+.sw-list button > span:not(.dot) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sw-list small { color: var(--mut); }
+.sw-list p { margin: 10px; color: var(--mut); }
+.pane:hover .pbar button[data-split] { display: grid; }
+/* drop zone preview when dragging a session onto a pane edge */
+.pane[data-drop]::after { content: ""; position: absolute; z-index: 6; pointer-events: none; border-radius: 8px;
+  background: color-mix(in srgb, var(--acc) 22%, transparent); border: 2px solid var(--acc); }
+.pane[data-drop=left]::after { inset: 0 50% 0 0; }
+.pane[data-drop=right]::after { inset: 0 0 0 50%; }
+.pane[data-drop=top]::after { inset: 0 0 50% 0; }
+.pane[data-drop=bottom]::after { inset: 50% 0 0 0; }
+.pane[data-drop=center]::after { inset: 0; }
+#view:not(.single) .pbar span { cursor: grab; }
+
+#empty { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+#empty[hidden] { display: none; }
+.empty-card { pointer-events: auto; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; color: var(--mut); }
+.empty-card > span { width: 60px; height: 60px; margin-bottom: 10px; border-radius: 18px; display: grid; place-items: center;
+  color: var(--acc); background: color-mix(in srgb, var(--acc) 12%, transparent); }
+.empty-card h2 { margin: 0; font-size: 16px; font-weight: 600; color: var(--fg); }
+.empty-card p { margin: 0 0 14px; }
+button.primary { padding: 8px 18px; border-radius: 8px; font-weight: 600; color: #fff; background: var(--acc); }
+button.primary:hover { color: #fff; background: color-mix(in srgb, var(--acc) 85%, #fff); }
+
+/* a collapsed group with a terminal that needs you: its count turns orange */
+.group.collapsed .ghead.attn .count { color: #1a1a1a; background: #f59e0b; border-radius: 8px; padding: 0 6px; }
+.group.collapsed .ghead.attn { animation: attn-row 1s ease-in-out 3; }
+:root.side-collapsed .group.collapsed .ghead.attn .ginit { background: #f59e0b; color: #1a1a1a; }
+/* which terminal rang (attention.js) */
+#note { position: fixed; z-index: 30; bottom: 16px; left: 50%; transform: translateX(-50%); zoom: var(--ui);
+  display: flex; align-items: center; gap: 8px; max-width: min(560px, 90vw); padding: 8px 14px; border-radius: 10px;
+  font: inherit; font-size: 13px; color: var(--fg); cursor: pointer; text-align: left;
+  background: color-mix(in srgb, var(--side) 90%, var(--fg)); border: 1px solid #f59e0b; box-shadow: 0 12px 32px #0007; }
+#note[hidden] { display: none; }
+#note svg { color: #f59e0b; flex: none; }
+#note b, #note span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#note span { opacity: .7; }
+#menu { position: fixed; z-index: 20; min-width: 200px; padding: 5px; display: flex; flex-direction: column; border-radius: 10px;
+  background: color-mix(in srgb, var(--side) 90%, var(--fg)); border: 1px solid color-mix(in srgb, var(--fg) 10%, transparent);
+  box-shadow: 0 12px 32px #0007, 0 2px 6px #0004; }
+#menu[hidden] { display: none; }
+#menu button { display: flex; align-items: center; gap: 10px; padding: 7px 10px; text-align: left; color: var(--fg); }
+#menu button svg { color: var(--mut); }
+#menu button:disabled { opacity: .4; cursor: default; background: none; }
+#menu small { display: block; color: var(--mut); font-size: 11.5px; }
+#menu [data-gs] { border-top: 1px solid var(--edge); border-radius: 0 0 6px 6px; }
+.mcount { display: flex; align-items: center; gap: 3px; padding: 4px 6px 8px 10px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--edge); color: var(--mut); font-size: 12px; }
+.mcount span { flex: 1; }
+#menu .mcount button { padding: 2px 9px; }
+#menu .mcount button.on { color: #fff; background: var(--acc); }
+
+/* settings page, shown over the terminal area */
+#settings-page { position: absolute; inset: 0; z-index: 10; overflow: auto; overflow-x: hidden; padding: 32px 40px 56px; background: var(--bg); }
+#settings-page[hidden] { display: none; }
+.sp-inner { max-width: 940px; margin: 0 auto; }
+.sp-head { display: flex; align-items: center; justify-content: space-between; }
+.sp-head h2 { margin: 0; font-size: 22px; font-weight: 600; }
+#settings-page h3 { margin-top: 30px; margin-bottom: 12px; font-size: 11px; font-weight: 600; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--mut); }
+#settings-page h4 { margin-top: 18px; margin-bottom: 10px; font-size: 12px; font-weight: 500; color: var(--mut); }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.card { position: relative; display: flex; flex-direction: column; gap: 7px; padding: 9px 11px 10px; text-align: left;
+  border-radius: 10px; border: 2px solid transparent; box-shadow: 0 1px 3px #0005; transition: border-color .12s; }
+.card:hover { z-index: 5; border-color: color-mix(in srgb, var(--acc) 50%, transparent); }
+.card.on { border-color: var(--acc); }
+.cname { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cansi { display: flex; gap: 3px; }
+.cansi i { flex: 1; height: 8px; border-radius: 2px; }
+/* bigger preview floating under the hovered card */
+.cprev { position: absolute; left: -2px; top: calc(100% + 6px); width: max(100%, 250px); padding: 12px 14px; border-radius: 10px;
+  background: inherit; box-shadow: 0 12px 32px #0008, 0 0 0 1px #8884; font: 12.5px/1.7 "Cascadia Mono", Consolas, monospace;
+  white-space: nowrap; opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity .15s, transform .15s; }
+.card:hover .cprev { opacity: 1; transform: none; }
+.fonts { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.font { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; text-align: left; color: var(--fg); border-radius: 10px;
+  background: color-mix(in srgb, var(--fg) 4%, transparent); border: 1px solid var(--edge); }
+.font:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.font.on { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc); }
+.fsample { font-size: 16px; white-space: nowrap; overflow: hidden; }
+.fname { font-size: 12px; color: var(--mut); }
+.panel { padding: 2px 18px; border-radius: 12px; background: color-mix(in srgb, var(--fg) 4%, transparent); border: 1px solid var(--edge); }
+.srow { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 52px; border-bottom: 1px solid var(--edge); }
+.srow:last-child { border-bottom: 0; }
+.lbl { display: flex; flex-direction: column; }
+.lbl small { font-size: 12px; color: var(--mut); }
+.ctl { display: flex; align-items: center; gap: 10px; color: var(--mut); }
+.btn { padding: 5px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent); color: var(--fg); }
+.btn:disabled { opacity: .4; cursor: default; }
+/* icon-only buttons in Settings: square, like the sidebar's */
+.btn:has(> svg:only-child) { width: 30px; height: 30px; padding: 0; flex: none; }
+.btn.on:disabled { opacity: 1; color: var(--acc); border-color: color-mix(in srgb, var(--acc) 50%, transparent); }
+input[type=color] { appearance: none; width: 38px; height: 28px; padding: 0; cursor: pointer; background: none;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent); border-radius: 8px; }
+input[type=color]::-webkit-color-swatch-wrapper { padding: 3px; }
+input[type=color]::-webkit-color-swatch { border: 0; border-radius: 5px; }
+input[type=range] { width: 220px; accent-color: var(--acc); }
+.val { min-width: 22px; text-align: right; color: var(--fg); }
+/* the font size number at the size the terminals get: undo the interface zoom; fixed width so the slider stays put */
+.val.fsize { width: 40px; font-size: calc(var(--fs) / var(--ui)); font-weight: 400; line-height: 1; white-space: nowrap; }
+.seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--side); border: 1px solid var(--edge); }
+.seg button { padding: 5px 14px; }
+.seg button.on { color: #fff; background: var(--acc); }
+input.switch { appearance: none; position: relative; width: 38px; height: 22px; margin: 0; cursor: pointer; border-radius: 11px;
+  background: color-mix(in srgb, var(--fg) 20%, transparent); transition: background .15s; }
+input.switch::before { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px #0005; transition: transform .15s; }
+input.switch:checked { background: var(--acc); }
+input.switch:checked::before { transform: translateX(16px); }
+/* Settings > Profiles and Groups */
+#settings-page input:not([type]), #settings-page select { height: 30px; min-width: 0; padding: 0 9px; border-radius: 7px; outline: none;
+  font: inherit; color: var(--fg); background: var(--side); border: 1px solid var(--edge); }
+#settings-page input:not([type]):focus, #settings-page select:focus { border-color: var(--acc); }
+#settings-page input::placeholder { color: var(--mut); opacity: .8; }
+/* a profile is one row (icon, name, what it runs); clicking it opens the fields below it */
+.pf { border-bottom: 1px solid var(--edge); }
+.pf-row { display: flex; align-items: center; gap: 10px; width: calc(100% + 36px); height: 46px; margin: 0 -18px; padding: 0 18px;
+  border-radius: 0; text-align: left; color: var(--fg); }
+.pf-row b { flex: none; font-weight: 600; }
+.pf-row code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right;
+  font: 12px "Cascadia Mono", Consolas, monospace; color: var(--mut); }
+.pf-row > svg:last-child { color: var(--mut); transition: transform .15s; }
+.pf.open .pf-row > svg:last-child { transform: rotate(90deg); }
+.tag { flex: none; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; color: var(--acc);
+  background: color-mix(in srgb, var(--acc) 15%, transparent); }
+.pf-edit { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 14px 28px; }
+.pf-acts { display: flex; gap: 8px; margin: 4px 0 0 114px; }
+.pf-field { display: flex; align-items: center; gap: 10px; }
+.pf-field > span { width: 104px; flex: none; color: var(--mut); font-size: 12px; }
+.pf-field input { flex: 1; }
+/* program, options and folders in a code font (more specific than the #settings-page input rule) */
+#settings-page .pf-field input, #settings-page .gf input { font: 12px "Cascadia Mono", Consolas, monospace; }
+#settings-page .pf-field input[data-pf="name"] { font: inherit; }
+.pf-foot { display: flex; align-items: center; gap: 14px; padding: 12px 0; color: var(--mut); }
+.pf-foot small { font-size: 12px; }
+button.link { padding: 0; color: var(--acc); text-decoration: underline; }
+.hint { margin: 12px 0 4px; color: var(--mut); font-size: 12px; }
+.gf { display: grid; grid-template-columns: 140px 190px 1fr auto; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--edge); }
+.gf:last-child { border-bottom: 0; }
+.gf b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the group Settings was opened for (right click > Profile and folder) */
+.flash { animation: flash 1.2s ease-out; border-radius: 8px; }
+@keyframes flash { 0%, 40% { background: color-mix(in srgb, var(--acc) 22%, transparent); } }
+.about-head { display: flex; align-items: center; gap: 14px; padding: 16px 0; border-bottom: 1px solid var(--edge); }
+.about-head b { font-size: 15px; }
+.about-head small { display: block; margin-top: 2px; color: var(--mut); }
+.logo.big { width: 42px; height: 42px; border-radius: 12px; font-size: 20px; }
+.mut { color: var(--mut); }
+kbd { padding: 2px 7px; margin: 0 1px; border-radius: 5px; font: 11.5px "Cascadia Mono", Consolas, monospace; color: var(--fg);
+  background: var(--side); border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent); border-bottom-width: 2px; }

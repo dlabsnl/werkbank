@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Werkbank",
+  "version": "0.1.0",
+  "identifier": "nl.dlabs.werkbank",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Werkbank",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 720,
+        "minHeight": 420,
+        "decorations": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "publisher": "dlabsnl",
+    "copyright": "Copyright (c) 2026 dlabsnl. MIT License.",
+    "shortDescription": "Terminal workspace for Windows",
+    "category": "DeveloperTool"
+  }
+}

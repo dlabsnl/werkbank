@@ -1,0 +1,24 @@
+{
+  "name": "werkbank",
+  "private": true,
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@fontsource/fira-code": "^5",
+    "@fontsource/jetbrains-mono": "^5",
+    "@fontsource/source-code-pro": "^5",
+    "@tauri-apps/api": "2.12.4",
+    "@tauri-apps/cli": "^2",
+    "@tauri-apps/plugin-clipboard-manager": "2.5.0",
+    "@tauri-apps/plugin-dialog": "2.8.3",
+    "@xterm/addon-canvas": "^0.7.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-search": "^0.15.0",
+    "@xterm/addon-serialize": "^0.13.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
+    "eslint": "10.13.0",
+    "globals": "17.13.0",
+    "typescript": "7.0.2"
+  }
+}

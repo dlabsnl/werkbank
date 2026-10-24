@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "noUnusedLocals": false,
+    "noFallthroughCasesInSwitch": true,
+    "target": "es2022",
+    "lib": [
+      "es2023",
+      "dom",
+      "dom.iterable"
+    ],
+    "types": [],
+    "skipLibCheck": true
+  },
+  "include": [
+    "ui/*.d.ts",
+    "ui/*.js"
+  ],
+  "exclude": [
+    "ui/vendor",
+    "ui/*.test.js"
+  ]
+}

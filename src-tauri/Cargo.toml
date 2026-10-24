@@ -1,0 +1,32 @@
+[package]
+name = "werkbank"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal workspace for Windows: grouped terminals, splits, resumable AI coding sessions"
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["image-png"] }
+serde_json = "1"
+portable-pty = "0.9"
+tauri-plugin-window-state = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-global-shortcut = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_Console", "Win32_System_Registry", "Win32_Security", "UI_Notifications", "Data_Xml_Dom", "Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_SystemInformation"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+# every unsafe block says why it is sound in a `// SAFETY:` comment, as the Rust standard library does
+undocumented_unsafe_blocks = "deny"
+
+[profile.release]
+strip = true

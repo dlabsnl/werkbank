@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Werkbank</title>
+  <link rel="stylesheet" href="vendor/xterm.css">
+  <link rel="stylesheet" href="vendor/fonts.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="titlebar" data-tauri-drag-region>
+    <div class="brand" data-tauri-drag-region><span class="logo">W</span>Werkbank</div>
+    <div class="winctl">
+      <button data-win="fullscreen" data-fs-btn data-icon="fullscreen" title="Full screen (F11)"></button>
+      <button data-win="min" data-icon="min" title="Minimize"></button>
+      <button data-win="max" data-icon="max" title="Maximize"></button>
+      <button data-win="close" data-icon="x" class="close" title="Close"></button>
+    </div>
+  </header>
+  <div id="app">
+    <div id="sidezone"></div>
+    <aside>
+      <div class="side-head"><span>Terminals</span><span><button id="showall" class="icon-btn" data-icon="grid" title="Show all terminals"></button><button id="undo" class="icon-btn" data-icon="undo" title="Nothing to undo" disabled></button><button id="newgroup" class="icon-btn" data-icon="folderPlus" title="New group"></button><button id="sidetoggle" class="icon-btn" data-icon="sidebar" title="Hide sidebar (Ctrl+Shift+B)"></button></span></div>
+      <div id="groups"></div>
+      <div id="selbar" hidden></div>
+      <div class="side-foot">
+        <button id="settings" class="icon-btn" data-icon="gear" data-icon-size="18" title="Settings"></button>
+        <button id="shortcuts" class="icon-btn" data-icon="keyboard" data-icon-size="18" title="Keyboard shortcuts"></button>
+        <button id="about" class="icon-btn" data-icon="info" data-icon-size="18" title="About Werkbank"></button>
+      </div>
+    </aside>
+    <div id="side-gutter" title="Drag to resize · double-click to reset"></div>
+    <main>
+      <div id="view"></div>
+      <button id="sideopen" class="icon-btn" data-icon="sidebar" data-icon-size="18" title="Show sidebar (Ctrl+Shift+B)"></button>
+      <section id="settings-page" hidden></section>
+      <div id="empty">
+        <div class="empty-card">
+          <span data-icon="terminal" data-icon-size="28"></span>
+          <h2>No terminal open</h2>
+          <p>Pick one in the sidebar, or start a new one.</p>
+          <button id="empty-new" class="primary">New terminal</button>
+        </div>
+      </div>
+    </main>
+  </div>
+  <div id="menu" hidden></div>
+  <button id="note" hidden></button>
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/addon-fit.js"></script>
+  <script src="vendor/addon-canvas.js"></script>
+  <script src="vendor/addon-serialize.js"></script>
+  <script src="vendor/addon-search.js"></script>
+  <script src="vendor/addon-web-links.js"></script>
+  <script src="schemes.js"></script>
+  <script src="themes.js"></script>
+  <script src="tree.js"></script>
+  <script src="groups.js"></script>
+  <script src="base.js"></script>
+  <script src="menus.js"></script>
+  <script src="links.js"></script>
+  <script src="terminal.js"></script>
+  <script src="panes.js"></script>
+  <script src="sidebar.js"></script>
+  <script src="attention.js"></script>
+  <script src="settings.js"></script>
+  <script src="window.js"></script>
+  <script src="keys.js"></script>
+  <script src="api.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
