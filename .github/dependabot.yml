@@ -1,0 +1,26 @@
+# Dependency updates, D-Labs standard (d-labsit/.github templates/dependabot.yml,
+# Vikunja #981): monthly, minor + patch grouped per ecosystem, every major its
+# own PR, 7-day cooldown. Security updates come straight away.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: docker
+    directory: /build
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps)"
