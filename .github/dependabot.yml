@@ -6,7 +6,8 @@ updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
+      day: wednesday
     cooldown:
       default-days: 7
     groups:
@@ -19,7 +20,8 @@ updates:
   - package-ecosystem: docker
     directory: /build
     schedule:
-      interval: monthly
+      interval: weekly
+      day: wednesday
     cooldown:
       default-days: 7
     commit-message:
