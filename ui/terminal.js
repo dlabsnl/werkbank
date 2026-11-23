@@ -69,6 +69,10 @@ function runtime(s) {
     // returned, so input that arrives while starting is queued and sent right after, instead of being dropped.
     if (!r.running) { if (r.starting) (r.pending ??= []).push(d); return; }
     writeTo(r, s.id, d);
+    // text typed but not sent would be lost when it sleeps; Enter or Ctrl+C clears it, keys and mouse (escapes) do not count
+    r.inputAt = Date.now();
+    if (d.includes('\r') || d.includes('\x03')) r.draft = false;
+    else if (!d.startsWith('\x1b') && [...d].some((c) => c >= ' ' && c !== '\x7f')) r.draft = true;
     // shortcut: Claude only stores a conversation after the first prompt, so "Enter was typed" stands in for "has one"
     if (d.includes('\r') && !s.resumable && profileOf(s)?.resume) { s.resumable = true; save(); }
   });
@@ -77,11 +81,18 @@ function runtime(s) {
   // Claude Code is busy while it reports progress (OSC 9;4, which it sends to ConEmu-style terminals, see pty.rs) or
   // animates its title; both quiet = done, maybe waiting for you. Either signal alone has broken before: the title
   // glyphs changed in 2.1.30x, and the progress cleared during tool calls in some versions.
+  // Only a change redraws (the title animates many times a second); `working` is set first, so a sidebar drawn by
+  // attention/calm already shows the new state.
   const busy = () => {
-    const now = !!(r.progress || r.spinning);
-    if (r.working && !now) attention(s.id);
-    if (!r.working && now) calm(s.id); // it went on by itself (a background job finished): no longer waiting for you
+    const now = !!(r.progress || r.spinning), was = !!r.working; // false only after real work: a shell sets titles too
+    if (now === was) return;
     r.working = now;
+    // what `werkbank send` typed is being worked on, and then done: `werkbank wait` goes by this (handoff.js)
+    if (now && r.job?.typedAt !== undefined) r.job.started = true;
+    if (!now && r.job?.started) r.job = undefined;
+    if (was && !now) { r.idleSince = Date.now(); attention(s.id); }
+    if (!was && now) calm(s.id); // it went on by itself (a background job finished): no longer waiting for you
+    renderSide();
   };
   term.parser.registerOscHandler(9, (d) => {
     if (!d.startsWith('4;')) return false;
@@ -99,6 +110,9 @@ function runtime(s) {
     if (title === r.title) return;
     r.firstTitle ??= title;
     r.title = title;
+    // a conversation topic is kept in layout.json: after a restart an asleep terminal (no program yet) is still called
+    // by it. Only for a conversation: a shell sets passing titles ("cmd.exe - echo x") that would stick.
+    if (s.resumable && title !== r.firstTitle && title !== s.title) { s.title = title; save(); }
     paneTitle(s);
     renderSide();
   });
@@ -134,23 +148,37 @@ async function start(s) {
   const r = runtime(s), p = profileOf(s);
   if (r.starting || r.running) return;
   r.starting = true;
+  // woken from sleep: once the old program is really gone (until then its conversation is in use), on an empty
+  // screen that the resumed conversation fills again
+  if (r.dying) await r.dying;
+  r.dying = undefined;
+  if (s.asleep) { s.asleep = undefined; r.term.reset(); save(); }
   if (!r.restored) {
     r.restored = true;
     const old = p.resume ? null : await invoke('load_screen', { id: s.id }).catch(() => null);
     if (old) r.term.write(`${old}\r\n\x1b[90m── resumed ──\x1b[0m\r\n`);
   }
   r.exited = false;
+  // a new program is busy or done only by its own signals, not by those of the one before (killed mid-work)
+  r.progress = r.spinning = false;
+  r.lastOutput = undefined; // `werkbank send` waits for this program's own output, not the last one's
   r.resuming = !!(p.resume && s.resumable);
   // A Claude that never got its first prompt saved no conversation, and --resume would fail on every start
   // ("No conversation found"): such a terminal starts fresh under the same id instead.
   if (r.resuming && isClaude(p) && !(await invoke('has_conversation', { id: s.id }).catch(() => true))) {
     log(`${s.name}: no saved conversation, starting it fresh`);
     r.resuming = s.resumable = false;
+    delete s.title;
     save();
   }
+  // a resumed Claude conversation waits for you, so it shows the check from the start; anything else only after work
+  r.working = r.resuming && isClaude(p) ? false : undefined;
+  r.idleSince = Date.now();
   r.startedAt = Date.now();
   const args = ((r.resuming ? p.resume : p.new) ?? []).map((a) => a.replaceAll('{id}', s.id));
-  const run = (r.run = {});
+  /** @type {NonNullable<Runtime["run"]>} */
+  const run = {};
+  r.run = run;
   /** @type {import('@tauri-apps/api/core').Channel<ArrayBuffer>} */
   const ch = new Channel();
   /** @type {import('@tauri-apps/api/core').Channel<number | null>} */
@@ -165,7 +193,7 @@ async function start(s) {
     const spawned = invoke('spawn', { id: s.id, command: [...p.command, ...args], cwd: s.cwd ?? p.cwd ?? null, cols: r.term.cols, rows: r.term.rows, onData: ch, onExit: exit });
     // handled once spawn has answered (a program can end before that), and only while it is still this terminal's
     // program: not after the terminal was removed or started again
-    exit.onmessage = (code) => spawned.then(() => { if (rt.get(s.id) === r && r.run === run) onExit(s.id, code); }, () => {});
+    exit.onmessage = (code) => (run.ended?.(), spawned.then(() => { if (rt.get(s.id) === r && r.run === run) onExit(s.id, code); }, () => {}));
     await spawned;
     // removed while it was starting (Ctrl+Z right after opening it): its program must not keep running untracked
     if (rt.get(s.id) !== r) {
@@ -190,6 +218,7 @@ function onExit(id, code) {
   const r = rt.get(id), f = findSession(id);
   if (!r) return;
   r.running = false;
+  if (f?.s.asleep) return renderSide(); // stopped by sleep() (memory.js): no "exited", no restart
   const spare = Object.entries(spares).find(([, s]) => s.id === id);
   if (spare) { // a warm session died before anyone used it: drop it, the next takeSession starts fresh
     delete spares[spare[0]];
@@ -202,6 +231,7 @@ function onExit(id, code) {
     r.flippedAt = Date.now();
     log(`${f.s.name}: starting it without resume`);
     f.s.resumable = false;
+    delete f.s.title;
     save();
     return start(f.s);
   }

@@ -26,6 +26,8 @@ done
 node ui/tree.test.js
 node ui/groups.test.js
 node ui/links.test.js
+node ui/budget.test.js
+node ui/handoff.test.js
 # strict types (tsconfig.json: JSDoc in the UI scripts, ui/types.d.ts) and ESLint (eslint.config.mjs)
 npx tsc -p .
 npx eslint .
@@ -36,5 +38,7 @@ npx eslint .
 # expand.rs has no dependencies, so it is tested natively without pulling in the Linux webview stack.
 rustc --edition 2021 --test src-tauri/src/expand.rs -o /tmp/expand-test && /tmp/expand-test
 rustc --edition 2021 --test src-tauri/src/editor.rs -o /tmp/editor-test && /tmp/editor-test
+# transcript.rs needs serde_json: a small package of its own runs its tests natively (src-tauri/native-tests)
+cargo test --locked --manifest-path src-tauri/native-tests/Cargo.toml --target-dir /tmp/native-tests
 npx tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --no-bundle
 ls -la src-tauri/target/x86_64-pc-windows-msvc/release/werkbank.exe

@@ -1,4 +1,4 @@
-// The settings page and what it changes: themes, fonts, sizes, profiles, groups, startup.
+// Settings (a panel at the right over the terminals) and what it changes: themes, fonts, sizes, profiles, groups, startup.
 
 // The five most popular coding fonts: Windows ships Cascadia Code and Consolas, the rest are bundled (see build.sh).
 const FONTS = ['Cascadia Code', 'JetBrains Mono', 'Fira Code', 'Source Code Pro', 'Consolas'];
@@ -15,6 +15,12 @@ const ZOOMS = [90, 100, 110, 125, 150];
 const SIDE_MODES = [['open', 'Always'], ['collapsed', 'Mini'], ['auto', 'Auto-hide']];
 // Which terminals start when Werkbank starts.
 const STARTUPS = [['shown', 'Terminals in the window'], ['all', 'All terminals']];
+/** @type {[number, string][]} minutes (0 = never), see memory.js */
+const SLEEPS = [[0, 'Never'], [30, '30 min'], [60, '1 hour'], [240, '4 hours']];
+/** @type {[number, string][]} percent of the computer's memory (0 = no budget), see memory.js */
+const BUDGETS = [[0, 'Off'], [15, '15%'], [25, '25%'], [40, '40%']];
+// One row of the settings page: label with its hint, and the control.
+const settingRow = (/** @type {string} */ label, /** @type {string} */ hint, /** @type {string} */ ctl) => `<div class="srow"><div class="lbl">${label}${hint ? `<small>${hint}</small>` : ''}</div><div class="ctl">${ctl}</div></div>`;
 // After a setting changed: apply it, save it, and redraw the settings page when it is open (keeping its scroll).
 function changed() {
   applySettings();
@@ -72,13 +78,13 @@ function renderSettings() {
         <span style="color:${c.yellow}">git:(main)</span> ls<br><span style="color:${c.cyan}">src</span>
         <span style="color:${c.magenta}">ui</span> README.md<br><span style="color:${c.red}">error</span>: 1 file changed</div></button>`;
   };
-  const row = (/** @type {string} */ label, /** @type {string} */ hint, /** @type {string} */ ctl) => `<div class="srow"><div class="lbl">${label}${hint ? `<small>${hint}</small>` : ''}</div><div class="ctl">${ctl}</div></div>`;
+  const row = settingRow;
   const k = (/** @type {string[]} */ ...keys) => keys.map((x) => `<kbd>${x}</kbd>`).join('');
   const KEYS = [
     ['Split right / down', `${k('Alt', 'Shift', '=')} / ${k('-')}`],
     ['Go to a terminal by name, topic or group', k('Ctrl', 'Shift', 'P')],
     ['Switch to terminal 1–9', k('Ctrl', '1…9')],
-    ['Next pane', k('Ctrl', 'Tab')],
+    ['Previous terminal, like Alt+Tab (hold Ctrl: further back, Shift: forward)', k('Ctrl', 'Tab')],
     ['Pane to the left / right / above / below', `${k('Alt')} + arrow keys`],
     ['Maximize the pane / back to the split', k('Ctrl', 'Shift', 'Enter')],
     ['New terminal like this one (same profile and folder)', k('Ctrl', 'Shift', 'D')],
@@ -104,7 +110,7 @@ function renderSettings() {
     ['Rename a terminal or group', 'Double-click its name'],
     ['Reorder groups and terminals', 'Drag them up or down in the sidebar'],
     ['Undo the last change (outside a terminal)', k('Ctrl', 'Z')],
-    ['With a selection', `the bar shows them side by side or stops them; ${k('Delete')} stops them (${k('Ctrl', 'Z')} undoes), ${k('Esc')} clears`],
+    ['With a selection', `the bar shows them side by side or stops them; ${k('Delete')} stops them, twice for ones in a locked group (${k('Ctrl', 'Z')} undoes), ${k('Esc')} clears`],
   ];
   const uiCard = (/** @type {[string, ReturnType<typeof uiTheme>]} */ [n, u]) => `<button class="card${n === (L.uiTheme ?? 'Graphite') ? ' on' : ''}" data-ui="${esc(n)}"
       style="background:${u.side};color:${u.fg}"><div class="cname">${esc(n)}</div>
@@ -142,10 +148,19 @@ function renderSettings() {
       ${groupTree(L.groups).map(({ g }) => groupRow(g)).join('')}</div>
     <h3>Startup</h3>
     <div class="panel">
-      ${row('When Werkbank starts', L.startup === 'all' ? 'Every terminal starts in the background, one after another; Claude continues its conversation'
+      ${row('When Werkbank starts', L.startup === 'all' ? 'Every terminal starts in the background, one after another; Claude continues its conversation. Asleep ones stay asleep'
         : 'The terminals in the window start; the others when you open them',
       `<div class="seg">${STARTUPS.map(([v, l]) => `<button data-startup="${v}" class="${v === (L.startup ?? 'shown') ? 'on' : ''}">${l}</button>`).join('')}</div>`)}
     </div>
+    <h3 id="memory-section">Memory</h3>
+    <div class="panel">
+      ${row('In use', 'Werkbank with every program in its terminals (Task Manager lists those separately)', `<b class="val">${bytes(memNow.total)} of ${bytes(memNow.ram)}</b>`)}
+      ${row('Sleep when waiting', 'A Claude terminal out of view that has waited for you this long stops, to free its memory; showing it continues the conversation. Text typed but not sent, a command still running in it, or Keep awake (right-click) keep it awake',
+      `<div class="seg">${SLEEPS.map(([v, l]) => `<button data-sleep="${v}" class="${v === (L.sleepAfter ?? SLEEP_AFTER) ? 'on' : ''}">${l}</button>`).join('')}</div>`)}
+      ${row('Budget', `Share of the computer's memory (${bytes(budgetBytes())}). Above it, the terminals that waited longest sleep first, each after at least ${MIN_WAIT / 60000} minutes of waiting`,
+      `<div class="seg">${BUDGETS.map(([v, l]) => `<button data-budget="${v}" class="${v === (L.memBudget ?? BUDGET) ? 'on' : ''}">${l}</button>`).join('')}</div>`)}
+    </div>
+    <div class="panel" id="mem-list">${memoryList()}</div>
     <h3>App theme</h3>
     <div class="cards">${Object.entries(UI_THEMES).map(uiCard).join('')}</div>
     <div class="panel" style="margin-top:12px">
@@ -167,6 +182,10 @@ function renderSettings() {
         `<input type="checkbox" class="switch" data-k="notifyToast"${L.notifyToast !== false ? ' checked' : ''}>`)}
       ${row('Flash', 'The terminal blinks in the sidebar, Werkbank flashes in the taskbar and its button counts the terminals waiting for you',
         `<input type="checkbox" class="switch" data-k="notifyFlash"${L.notifyFlash !== false ? ' checked' : ''}>`)}
+      ${row('When you are away, run a command', 'A program with its arguments (no shell), started once when a Claude terminal has finished, you have not looked at it (it blinks amber: Flash must be on) and the PC had no keyboard or mouse input for the minutes below. It gets WERKBANK_AWAY_TERMINAL, _GROUP, _ID and _MINUTES in its environment; the names come from the programs in the terminals, so a script must never put them into a command line (cmd /c, Invoke-Expression). Empty = off',
+        `<input data-k="awayCommand" value="${esc(L.awayCommand ?? '')}" placeholder="off" spellcheck="false">`)}
+      ${row('Minutes away', 'How long the terminal waits unseen and the PC is left alone before the command runs',
+        `<input type="range" data-k="awayAfter" min="1" max="60" step="1" value="${L.awayAfter ?? AWAY_AFTER}"><b class="val">${L.awayAfter ?? AWAY_AFTER}</b>`)}
     </div>
     <h3>Terminal colors</h3>
     ${[['dark', 'Dark'], ['medium', 'Medium'], ['light', 'Light']].map(([tone, title]) => `<h4>${title}</h4>
@@ -300,9 +319,16 @@ pageEl.addEventListener('click', async (e) => {
   saveProfiles();
 });
 function closeSettings() { pageEl.hidden = true; if (L.active) rt.get(L.active)?.term.focus(); }
+// A click next to the panel (a terminal, the sidebar) closes it, like Esc. Its own menus and the buttons that open it
+// do not, nor the title bar (moving the window).
+document.addEventListener('mousedown', (e) => {
+  if (pageEl.hidden || !(e.target instanceof Element) || e.target.closest('#settings-page, #menu, #titlebar, #settings, #shortcuts, #about, #memory')) return;
+  closeSettings();
+}, true);
 $('#settings').onclick = () => (pageEl.hidden ? openSettings() : closeSettings());
 $('#shortcuts').onclick = () => openSettings('#keys');
 $('#about').onclick = () => openSettings('#about-section');
+$('#memory').onclick = () => openSettings('#memory-section');
 pageEl.addEventListener('click', (e) => {
   const b = /** @type {Element} */ (e.target).closest('button');
   if (!b) return;
@@ -311,6 +337,13 @@ pageEl.addEventListener('click', (e) => {
   else if (b.dataset.zoom) return setZoom(Number(b.dataset.zoom));
   else if (b.dataset.side) return setSideMode(/** @type {Layout['sideMode']} */ (b.dataset.side));
   else if (b.dataset.startup) L.startup = /** @type {Layout['startup']} */ (b.dataset.startup);
+  else if (b.dataset.sleep) L.sleepAfter = Number(b.dataset.sleep);
+  else if (b.dataset.budget) L.memBudget = Number(b.dataset.budget);
+  else if (b.dataset.sleepNow) {
+    const f = findSession(b.dataset.sleepNow);
+    if (f && canSleep(f.s)) sleep(f.s, 'by hand');
+    return showMemory();
+  }
   else if ('testAttn' in b.dataset) return attention(null, true);
   else if (b.dataset.cursor) L.cursorStyle = /** @type {Layout['cursorStyle']} */ (b.dataset.cursor);
   else if (b.dataset.font) L.fontFamily = b.dataset.font;

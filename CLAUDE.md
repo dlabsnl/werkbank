@@ -10,14 +10,17 @@ resume. Tauri 2 (Rust) + plain JavaScript + xterm.js. Everything user-facing is 
 | `ui/base.js` | Loaded first: shared state (`L` persisted layout, `profiles`, `rt` runtime per terminal), helpers, icons, `save`, undo. Undo restores groups and terminals in place, so a held session object stays live |
 | `ui/menus.js` | Every right-click menu, and the clipboard (`copySelection`, `pasteInto`) |
 | `ui/links.js` | Ctrl+click file links (`path:line`) in terminal output, opened by `open_file` (main.rs, editor.rs) |
-| `ui/terminal.js` | One terminal: xterm + pane, start/stop its program, new / remove terminals, warm sessions, file drop |
+| `ui/terminal.js` | One terminal: xterm + pane, start/stop its program (a sleeping one resumes once its old program has ended), new / remove terminals, warm sessions, file drop |
+| `ui/memory.js` | Memory: measures every 10 s (memory.rs), the footer readout and Settings > Memory, and sleep: which waiting terminals stop to free memory (timer and budget), saved in the layout so they stay asleep at startup |
+| `ui/budget.js` | `pickSleepers`: which waiting terminals sleep, the longest waiting first; tested by `ui/budget.test.js` |
 | `ui/panes.js` | The window: split tree, show / hide / place, maximize, focus, Alt+arrows |
 | `ui/sidebar.js` | Groups and terminals in the sidebar: rows, selection, rename, dragging (also panes by their title) |
-| `ui/attention.js` | Chime, blinking, Windows notification, taskbar count |
-| `ui/settings.js` | Settings page: themes, fonts, sizes, profiles, groups, startup |
+| `ui/attention.js` | Chime, blinking, Windows notification, taskbar count, and the away command (Settings > Notifications) |
+| `ui/settings.js` | Settings (a panel at the right over the terminals): themes, fonts, sizes, profiles, groups, startup |
 | `ui/window.js` | Frameless window: title bar, full screen, sidebar width |
-| `ui/keys.js` | Keyboard shortcuts, go-to-terminal box |
-| `ui/api.js` | Answers the `werkbank` command (list / open / send / close) |
+| `ui/keys.js` | Keyboard shortcuts, go-to-terminal box (by name, label, group, and what was said in the Claude conversations) |
+| `ui/api.js` | Answers the `werkbank` command (list / open / send / close, and wait / read / search / label). `send` leaves a job on the terminal that `wait` goes by |
+| `ui/handoff.js` | `waitVerdict` (is a terminal done, and the exit code of `werkbank wait`), `cleanTag` (a terminal's label), `awayDue` (the away command); tested by `ui/handoff.test.js` |
 | `ui/main.js` | Loaded last: startup, saving on quit |
 | `ui/selftest.js` | The checks of `werkbank --selftest`; only loaded in that mode |
 | `ui/style.css` | All styling; theme colors are CSS variables set by `applySettings()` |
@@ -27,8 +30,11 @@ resume. Tauri 2 (Rust) + plain JavaScript + xterm.js. Everything user-facing is 
 | `src-tauri/src/main.rs` | Wiring: plugins, window, single instance, global hotkey, small commands (icons, links, quit) |
 | `src-tauri/src/pty.rs` | The programs in the terminals: spawn / write / resize / kill (ConPTY). `write` only queues: one writer thread per terminal keeps the keystrokes in order and blocks nothing else |
 | `src-tauri/src/store.rs` | Files in %APPDATA%: profiles.json, layout.json, screens, the log |
-| `src-tauri/src/api.rs` | Local control API + the `werkbank list/open/close/send` command line client |
+| `src-tauri/src/api.rs` | Local control API + the `werkbank` command line client (`COMMANDS`; `request` turns a command line into the arguments for the UI; `wait` polls and owns the exit codes) |
+| `src-tauri/src/transcript.rs` | Reads Claude Code's conversation files: topic, last answer (`werkbank read`), text search. Only serde_json, tested natively through `src-tauri/native-tests` |
+| `src-tauri/src/away.rs` | The away command: seconds without keyboard or mouse input, and starting the command (argv, the terminal in environment variables) |
 | `src-tauri/src/notify.rs` | Windows notifications and the link a click on one opens |
+| `src-tauri/src/memory.rs` | Memory of Werkbank and of each terminal's program with everything it started (private working set, like Task Manager), whether that program runs something it started later (a background command: it does not sleep), and the computer's memory |
 | `src-tauri/src/icon.rs`, `expand.rs` | Program icons from .exe files; `%VAR%` expansion |
 | `ui/types.d.ts` | The shared types for `tsc`: layout.json (`Layout`, `Group`, `Session`, `TreeNode`), `Profile`, `Runtime`, and every Rust command (`Commands`) and event (`Events`) with its arguments and result, so `invoke` and `listen` are checked |
 | `build.sh` | Runs inside the `werkbank-build` image: vendor files, fonts, tests, cross-compile to Windows |
@@ -45,16 +51,17 @@ docker run --rm -v "$PWD":/src -v werkbank-cargo:/usr/local/cargo/registry -v we
 ```
 
 - `build.sh` stops at the first failure of:
-  - `node ui/*.test.js` (tree.js, links.js)
+  - `node ui/*.test.js` (tree.js, groups.js, links.js, budget.js, handoff.js)
   - `tsc` in strict mode over every `ui/*.js` (types as JSDoc, shared ones in `ui/types.d.ts`)
   - ESLint (`eslint.config.mjs`) with `no-undef` on: the names the scripts share are read from the scripts themselves
     (espree, in index.html order), so a misspelled global fails the build instead of the startup
   - `cargo fmt --check` (the official Rust style guide), clippy on all targets with warnings as errors
-  - the native tests of `expand.rs` and `editor.rs`
+  - the native tests of `expand.rs`, `editor.rs` and `transcript.rs` (the last one needs serde_json: `cargo test` on
+    the package in `src-tauri/native-tests`, whose only source is that file)
 - It also builds `werkbank-tests.exe` (the Rust tests that need Windows, e.g. api.rs): run it on Windows next to the
   selftest; exit 0 = all passed. Run `cargo fmt` before committing.
 - After every build, before installing it: run `werkbank.exe --selftest` on Windows (next to a running Werkbank is
-  fine). It runs `ui/selftest.js` against that exe in a throwaway folder with two cmd profiles and its own WebView2
+  fine: its window opens off screen, without focus, taskbar button, Alt+Tab entry or notifications). It runs `ui/selftest.js` against that exe in a throwaway folder with two cmd profiles and its own WebView2
   data, prints one PASS/FAIL line per check and exits 0 only when all passed. A new feature or a fixed bug gets a
   check there.
 - UI changes: also look at them in the running app, not just by reading.
@@ -77,7 +84,7 @@ docker run --rm -v "$PWD":/src -v werkbank-cargo:/usr/local/cargo/registry -v we
 | Add / new | `plus` | new terminal, add profile |
 | New group | `folderPlus` | sidebar header |
 | Close, hide, dismiss — nothing is lost | `x` | hide a pane (keeps running), close Settings / find box, clear selection, window close, no color |
-| Stop, remove, delete — something ends | `trash` | stop a terminal, close a group's terminals, delete an empty group, delete a profile, stop the selection |
+| Stop, remove, delete — something ends | `trash` | stop a terminal, close a group's terminals, delete a group, delete a profile, stop the selection |
 | Show side by side | `grid` | show a group, show the selection |
 | Split | `splitRight` / `splitDown` | pane bar, terminal menu |
 | Lock | `lock` / `unlock` | group lock |
@@ -87,8 +94,13 @@ docker run --rm -v "$PWD":/src -v werkbank-cargo:/usr/local/cargo/registry -v we
 | Try / preview | `play` | test the notification |
 | Find | `search` · `up` / `down` | find box |
 | Copy / paste | `copy` / `paste` | terminal menu |
+| Rename | `pencil` | group menu |
 | Fold open / closed | `chevron` (rotated when open) | groups, profile rows |
 | Maximize / restore | `max` / `restore` | window, a pane (Ctrl+Shift+Enter) |
+| Done: not working, waiting for you | `check` | status mark of a Claude terminal (sidebar, go-to box); working is a turning ring |
+| Asleep: stopped to free memory, resumes when shown | `moon` | status mark (sidebar, go-to box), Sleep now (menus, Settings > Memory) |
+| Keep awake: never sleeps | `sun` | terminal menu |
+| Memory | `chip` | sidebar footer: opens Settings > Memory |
 
 - A new meaning gets a new icon in `ICONS` (16px grid, stroke 1.4, round caps and joins); never reuse an icon for a
   different meaning, and never give one meaning two icons.
@@ -134,7 +146,7 @@ docker run --rm -v "$PWD":/src -v werkbank-cargo:/usr/local/cargo/registry -v we
   shows in the sidebar calls `renderSide()` + `save()`.
 - Undo is a JSON snapshot (`checkpoint` / `undo` in base.js). What it takes back is exactly the `Snapshot` fields
   (groups with their terminals, split tree, active terminal, pane spots, profiles); settings, the maximized pane,
-  the selection and the sidebar width are not undoable on purpose. A new `Layout` field goes into one of these two
+  the selection, the sidebar width and a terminal's label (`Session.tag`, set by programs) are not undoable on purpose. A new `Layout` field goes into one of these two
   lists (the comment above `Snapshot`).
 - Every change to groups, terminals or the split tree starts with `checkpoint('what')`.
 - State: `L` is persisted (`save()`), `profiles` via `saveProfiles()`, `rt` is runtime only.
@@ -161,7 +173,22 @@ docker run --rm -v "$PWD":/src -v werkbank-cargo:/usr/local/cargo/registry -v we
 - The control API listens on 127.0.0.1 only, needs the token (compared in constant time) and reads at most one line
   of 1 MB. Every program inside a Werkbank terminal has the token; that is by design (`werkbank send` included, a
   deliberate choice). It is not passed on over ssh, so remote hosts cannot use it.
+- The same goes for reading: `werkbank read` and `search` give any program with the token the screen of every
+  terminal and the Claude conversations of all of them. By design (same user, same token as `send`); it is in the
+  README so the user knows. What they give back goes through `printable` (handoff.js): no control characters reach
+  the asking program's terminal.
+- Each option of the command line counts for its own command only (`request` in api.rs); in the text of `send`,
+  `label` and `search` every other word is text, and after `--` all of them are. A new option gets its command in
+  its match arm, and a line in `command_lines_become_requests`.
 - Files are written atomically (`write_atomic`); config stays in %APPDATA%, never next to the exe.
 - The programs in the terminals are in a Windows job that ends them with Werkbank (also after a crash), so none keeps
-  running unseen; what they start themselves breaks away. The log holds no typed or sent text, only names.
+  running unseen; what they start themselves breaks away. The log holds no typed or sent text, only names; the
+  same for what `werkbank read` and `search` give back and for search queries (`UNLOGGED` in api.js).
+- Claude's conversation files are read, never written, and only for the ids of Werkbank's own terminals
+  (`valid_id`). Their format is not documented: everything that depends on it is in `transcript.rs`.
+- The away command is an argv from the user's own settings, started without a shell, for Claude terminals only.
+  Names of terminals and groups reach it only as environment variables, cut down by `safe_name` (away.rs), and its
+  minutes and command line are checked when layout.json is loaded (main.js).
+- Searching conversations runs on a blocking thread, one search at a time; a newer search of the go-to box ends
+  the older one between two files (`search_conversations` in pty.rs, `transcript::search`).
 - Commits: English, `type: summary`, a body with the why.

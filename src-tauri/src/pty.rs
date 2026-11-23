@@ -4,6 +4,7 @@ use crate::{
     api,
     expand::expand,
     store::{es, valid_id},
+    transcript,
 };
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use std::{
@@ -151,7 +152,13 @@ pub fn spawn(
         .and_then(|e| e.parent().map(|d| d.to_path_buf()))
     {
         let path = std::env::var_os("PATH").unwrap_or_default();
-        let joined = std::env::join_paths(std::env::split_paths(&path).chain(std::iter::once(dir)));
+        let rest = std::env::split_paths(&path);
+        // The selftest puts its own exe first: an installed Werkbank on the PATH would otherwise answer its checks.
+        let joined = if crate::store::SELFTEST_DIR.get().is_some() {
+            std::env::join_paths(std::iter::once(dir).chain(rest))
+        } else {
+            std::env::join_paths(rest.chain(std::iter::once(dir)))
+        };
         cmd.env("PATH", joined.unwrap_or(path));
     }
     if let Some(dir) = cwd
@@ -223,24 +230,88 @@ pub fn spawn(
     Ok(())
 }
 
-/// Whether Claude Code saved a conversation under this id (`<config>\projects\<folder>\<id>.jsonl`, config =
-/// CLAUDE_CONFIG_DIR or %USERPROFILE%\.claude). Claude only saves one after its first prompt; resuming an id it never
-/// saved fails with "No conversation found". True when it cannot tell, so a resume is never dropped by mistake.
+/// Where Claude Code keeps its conversations: `<config>\projects`, config = CLAUDE_CONFIG_DIR or %USERPROFILE%\.claude.
+fn claude_projects() -> Option<std::path::PathBuf> {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE").map(|h| std::path::Path::new(&h).join(".claude"))
+        })
+        .map(|r| r.join("projects"))
+}
+
+/// Whether Claude Code saved a conversation under this id (`<projects>\<folder>\<id>.jsonl`). Claude only saves one
+/// after its first prompt; resuming an id it never saved fails with "No conversation found". True when it cannot
+/// tell, so a resume is never dropped by mistake.
 #[tauri::command]
 pub fn has_conversation(id: String) -> bool {
     if !valid_id(&id) {
         return false;
     }
-    let root = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("USERPROFILE").map(|h| std::path::Path::new(&h).join(".claude"))
-        });
-    let Some(Ok(dirs)) = root.map(|r| std::fs::read_dir(r.join("projects"))) else {
+    let Some(Ok(dirs)) = claude_projects().map(std::fs::read_dir) else {
         return true;
     };
     dirs.flatten()
         .any(|d| d.path().join(format!("{id}.jsonl")).is_file())
+}
+
+/// The saved conversation of a terminal, when Claude Code has one under its id.
+fn conversation_file(id: &str) -> Option<std::path::PathBuf> {
+    if !valid_id(id) {
+        return None;
+    }
+    std::fs::read_dir(claude_projects()?)
+        .ok()?
+        .flatten()
+        .map(|d| d.path().join(format!("{id}.jsonl")))
+        .find(|f| f.is_file())
+}
+
+/// The topic of a saved Claude conversation, for a terminal that has not run since Werkbank started (asleep): the
+/// last name given with /rename, else the last title Claude made up. Async (off the main thread): transcripts run to
+/// many MB. How the file is read: transcript.rs.
+#[tauri::command]
+pub async fn conversation_title(id: String) -> Option<String> {
+    transcript::title(&std::fs::read_to_string(conversation_file(&id)?).ok()?)
+}
+
+/// `werkbank read`: Claude's last text message after the last prompt of this terminal's conversation; None when
+/// there is no conversation or no answer yet.
+#[tauri::command]
+pub async fn conversation_answer(id: String) -> Option<String> {
+    transcript::last_answer(&std::fs::read_to_string(conversation_file(&id)?).ok()?)
+}
+
+/// One search reads conversations at a time, and a search of the go-to box ends when the box asks again (each
+/// key there is a new search): otherwise scans of many MB each pile up behind fast typing.
+static SEARCHING: Mutex<()> = Mutex::new(());
+static BOX_SEARCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The terminals (in the order given) whose conversation mentions `query`, each with the place it was last said:
+/// the go-to box (`replaces`: this search takes the place of the box's earlier one, which then gives nothing) and
+/// `werkbank search` (runs to its end). On a thread for blocking work: it reads whole conversations.
+#[tauri::command]
+pub async fn search_conversations(
+    ids: Vec<String>,
+    query: String,
+    replaces: bool,
+) -> Vec<(String, String)> {
+    use std::sync::atomic::Ordering::SeqCst;
+    // a query that is too short or absurdly long matches nothing
+    if !(2..=200).contains(&query.trim().chars().count()) {
+        return Vec::new();
+    }
+    let mine = replaces.then(|| BOX_SEARCH.fetch_add(1, SeqCst) + 1);
+    let stale = move || mine.is_some_and(|n| BOX_SEARCH.load(SeqCst) != n);
+    let scan = move || {
+        // a search that panicked holds nothing the next one needs
+        let _one = SEARCHING.lock().unwrap_or_else(|e| e.into_inner());
+        let read = |id: &str| std::fs::read_to_string(conversation_file(id)?).ok();
+        transcript::search(ids, &query, read, stale)
+    };
+    tauri::async_runtime::spawn_blocking(scan)
+        .await
+        .unwrap_or_default()
 }
 
 // sync and instant: it only queues the text for the terminal's writer thread, in the order the UI sent it
@@ -272,4 +343,32 @@ pub fn kill(ptys: State<Ptys>, id: String) -> Result<(), String> {
     let mut map = ptys.0.lock().unwrap();
     let pty = map.get_mut(&id).ok_or("no such session")?;
     pty.killer.kill().map_err(es)
+}
+
+/// Memory of Werkbank with everything it runs (its webview and the terminals), of each terminal's program with
+/// what that started (Claude's MCP servers, shells) and whether it is busy with something, and the computer's memory.
+/// See memory.rs.
+#[tauri::command(async)] // a few ms over every process: off the window's thread
+pub fn memory(ptys: State<Ptys>) -> serde_json::Value {
+    let ids: Vec<(String, u32)> = ptys
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|(id, p)| Some((id.clone(), p.pid?)))
+        .collect();
+    let roots: Vec<u32> = std::iter::once(std::process::id())
+        .chain(ids.iter().map(|(_, pid)| *pid))
+        .collect();
+    let trees = crate::memory::trees(&crate::memory::snapshot(), &roots);
+    let terminals: serde_json::Map<String, serde_json::Value> = ids
+        .into_iter()
+        .zip(trees.iter().skip(1))
+        .map(|((id, _), t)| (id, serde_json::json!({ "bytes": t.bytes, "busy": t.busy })))
+        .collect();
+    serde_json::json!({
+        "total": trees.first().map_or(0, |t| t.bytes),
+        "ram": crate::memory::ram(),
+        "terminals": terminals,
+    })
 }

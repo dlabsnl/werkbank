@@ -84,6 +84,10 @@ pub fn link_target(app: &AppHandle, args: &[String]) -> Option<String> {
 /// Shows a notification; clicking it opens terminal `id` (see `link_target`).
 #[tauri::command]
 pub fn notify(app: AppHandle, id: String, title: String, body: String) -> Result<(), String> {
+    // the selftest window has no focus (it runs behind your work), so every attention check would pop a real toast
+    if crate::store::SELFTEST_DIR.get().is_some() {
+        return Ok(());
+    }
     #[cfg(windows)]
     {
         use windows::core::HSTRING;

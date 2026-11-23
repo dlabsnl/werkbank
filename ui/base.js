@@ -71,6 +71,10 @@ const ICONS = {
   folder: '<path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/>',
   star: '<path d="M8 2.5l1.7 3.5 3.8.5-2.8 2.6.7 3.8L8 11.1l-3.4 1.8.7-3.8L2.5 6.6l3.8-.6z"/>',
   play: '<path d="M5.5 3.5v9l7-4.5z"/>',
+  check: '<path d="M3.5 8.5l3 3 6-7"/>',
+  moon: '<path d="M13 9.5A5.5 5.5 0 1 1 6.5 3a4.5 4.5 0 0 0 6.5 6.5z"/>',
+  sun: '<circle cx="8" cy="8" r="2.75"/><path d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1.05 1.05M11.35 11.35l1.05 1.05M3.6 12.4l1.05-1.05M11.35 4.65l1.05-1.05"/>',
+  chip: '<rect x="4" y="4" width="8" height="8" rx="1.2"/><path d="M6.5 1.75V4M9.5 1.75V4M6.5 12v2.25M9.5 12v2.25M1.75 6.5H4M1.75 9.5H4M12 6.5h2.25M12 9.5h2.25"/>',
   bell: '<path d="M4 11.5V7a4 4 0 0 1 8 0v4.5l1 1.5H3z"/><path d="M6.5 14a1.5 1.5 0 0 0 3 0"/>',
   grid: '<rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/>',
   splitRight: '<rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M8 2.5v11"/>',
@@ -83,6 +87,7 @@ const ICONS = {
   undo: '<path d="M4 6.5h6a3 3 0 0 1 0 6H7"/><path d="M6.5 4 4 6.5 6.5 9"/>',
   sidebar: '<rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M6 2.5v11"/>',
   info: '<circle cx="8" cy="8" r="5.75"/><path d="M8 7.5v3.25M8 5.25h.01"/>',
+  pencil: '<path d="M10.5 3.5l2 2L6 12l-2.75.75L4 10z"/><path d="M9.25 4.75l2 2"/>',
   trash: '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8a1 1 0 0 0 1 .9h3.8a1 1 0 0 0 1-.9l.6-8"/>',
   min: '<path d="M3.5 8h9"/>',
   max: '<rect x="3.5" y="3.5" width="9" height="9" rx="1.5"/>',
@@ -148,8 +153,9 @@ function save() {
 // Undo: a snapshot before each change (max 30). Undoing a removal brings the terminal back (Claude resumes its
 // conversation, shells get their saved screen); undoing an open stops it again; profile edits in Settings come back too.
 // Undoable: exactly the fields of Snapshot (groups with their terminals, split tree, active terminal, remembered pane
-// spots, profiles). Not undoable on purpose: settings (theme, fonts, sizes, notifications, sidebar), the maximized pane,
-// the selection and the sidebar width. A new field in Layout belongs in one of these two lists.
+// spots, profiles). Not undoable on purpose: settings (theme, fonts, sizes, notifications, sidebar, sleep), the maximized pane,
+// the selection, the sidebar width and a terminal's label (a program sets it with `werkbank label`: taking back
+// something else must not put an older label back). A new field in Layout belongs in one of these two lists.
 // (not `history`: that name is the browser's own window.history)
 /** @typedef {{ groups: Group[], tree: TreeNode | null, active: string | null, spots?: Layout['spots'], profiles?: Profile[] }} Snapshot */
 /** @type {{ label: string, snap: string }[]} */
@@ -182,7 +188,7 @@ function undo() {
     return Object.assign(old, x);
   };
   s.groups = s.groups.map((g) => revive(L.groups.find((o) => o.id === g.id),
-    { ...g, sessions: g.sessions.map((x) => revive(sessions.find((o) => o.id === x.id), x)) }));
+    { ...g, sessions: g.sessions.map((x) => { const o = sessions.find((o) => o.id === x.id); return revive(o, o ? { ...x, tag: o.tag } : x); }) }));
   Object.assign(L, s);
   updateUndo();
   if (edited) return saveProfiles();
@@ -209,7 +215,8 @@ const colorOf = (/** @type {string} */ id) => { const f = findSession(id); retur
 const defaultProfile = () => profiles.find((p) => p.default) || profiles[0];
 // What a terminal is called: its own title (like a Windows Terminal tab), unless you renamed it yourself. The first
 // title a program sets is generic (Claude Code: "Claude Code") and would make all terminals look alike, so it is skipped.
-const label = (/** @type {Session} */ s) => { const r = rt.get(s.id); return (!s.custom && r?.title && r.title !== r.firstTitle && r.title) || s.name; };
+// Without a title of its own yet (asleep, or just started) it is called by the last one it had (s.title).
+const label = (/** @type {Session} */ s) => { const r = rt.get(s.id); return (!s.custom && ((r?.title && r.title !== r.firstTitle && r.title) || s.title)) || s.name; };
 const isClaude = (/** @type {Profile | undefined} */ p) => /claude(\.exe)?$/i.test(p?.command?.[0] ?? '');
 const profileOf = (/** @type {Session} */ s) => profiles.find((p) => p.name === s.profile) || defaultProfile();
 // A group can have its own profile and folder for new terminals (right click on the group row).

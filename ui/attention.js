@@ -36,6 +36,7 @@ function attention(id, test = false) {
   if (!document.hasFocus()) win.requestUserAttention(2).catch(() => {}); // 2 = informational: flash the taskbar button
   const r = id && rt.get(id);
   if (!r) return;
+  if (!r.attn) r.attnAt = Date.now(); // a second bell while still amber is the same wait
   r.attn = true;
   r.pane.classList.remove('attn');
   void r.pane.offsetWidth; // restart the CSS animation
@@ -88,3 +89,30 @@ async function updateBadge() {
   if (n !== badgeCount) return; // the count changed while drawing; that newer call sets the icon
   win.setOverlayIcon(new Uint8Array(await png.arrayBuffer())).catch(console.error);
 }
+
+// Away (Settings > Notifications, off by default): a Claude terminal that finished stays amber until you look at
+// it. When one has been amber for the set minutes and the PC had no keyboard or mouse input for as long, the command
+// runs, once for that wait. Which terminal it is about goes to the command in environment variables (away.rs).
+const AWAY_AFTER = 10; // minutes, default of Settings > Notifications > Minutes away
+async function tickAway() {
+  const command = splitArgs(L.awayCommand ?? '');
+  if (!command.length) return;
+  const minutes = L.awayAfter ?? AWAY_AFTER, afterMs = minutes * 60000;
+  // only a Claude that is done: a shell's bell is no wait for you, and neither is another program that sets a
+  // title like Claude's
+  /** @param {number} idleMs */
+  const due = (idleMs) => allSessions().filter((s) => {
+    const r = rt.get(s.id);
+    return !!r?.attn && r.working === false && isClaude(profileOf(s)) && awayDue({ attnAt: r.attnAt, ranFor: r.awayFor }, { now: Date.now(), idleMs, afterMs });
+  });
+  if (!due(Infinity).length) return;
+  const idleMs = (await invoke('idle_seconds')) * 1000;
+  for (const s of due(idleMs)) {
+    const r = rt.get(s.id), f = findSession(s.id);
+    if (!r || !f) continue;
+    r.awayFor = r.attnAt;
+    invoke('away_run', { command, terminal: label(s), group: groupPath(L.groups, f.g), id: s.id, minutes })
+      .then(() => log(`away command started for ${s.name}`), (e) => log(`away command failed: ${e}`));
+  }
+}
+setInterval(() => tickAway().catch(console.error), 20000);

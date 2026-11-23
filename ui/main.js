@@ -29,6 +29,13 @@ listen('before-quit', async () => {
   // colors end up in style attributes: only #rrggbb from layout.json
   for (const o of [...L.groups, ...L.groups.flatMap((g) => g.sessions ?? [])]) if (o.color && !/^#[0-9a-f]{6}$/i.test(o.color)) delete o.color;
   for (const g of L.groups) if (typeof g.parent !== 'string') delete g.parent;
+  for (const s of L.groups.flatMap((g) => g.sessions ?? [])) { // a label is one short line
+    const tag = typeof s.tag === 'string' ? cleanTag(s.tag) : '';
+    if (tag) s.tag = tag; else delete s.tag;
+  }
+  // the away command is started as a program: only a command line and whole minutes from layout.json
+  if (typeof L.awayCommand !== 'string') delete L.awayCommand;
+  L.awayAfter = awayMinutes(L.awayAfter);
   L.fontSize ??= 14;
   if (!FONTS.includes(L.fontFamily)) L.fontFamily = 'Cascadia Code';
   L.cursorStyle ??= 'block';
@@ -40,13 +47,24 @@ listen('before-quit', async () => {
   await Promise.all([applySettings(), loadProgramIcons()]);
   if (!L.groups.length) L.groups.push({ id: uid(), name: 'General', collapsed: false, sessions: [] });
   renderView();
+  // Claude terminals without a kept title (asleep since before titles were kept) get theirs from the conversation
+  for (const s of allSessions().filter((x) => !x.title && !x.custom && x.resumable && isClaude(profileOf(x)))) {
+    invoke('conversation_title', { id: s.id }).then((t) => {
+      if (!t || s.title) return;
+      s.title = t;
+      save();
+      paneTitle(s);
+      renderSide();
+    }).catch((e) => log(`${s.name}: no conversation title:`, e));
+  }
   invoke('launch_target').then((id) => { if (id && findSession(id)) reveal(id); }).catch((e) => log('launch target:', e));
   // "All terminals" at startup: the rest start in the background too, one every 400 ms so they don't all load at once
-  if (L.startup === 'all') allSessions().forEach((s, i) => setTimeout(() => start(s), 800 + i * 400));
+  // asleep ones stay asleep (memory.js): they start when you open them
+  if (L.startup === 'all') allSessions().filter((s) => !s.asleep).forEach((s, i) => setTimeout(() => start(s), 800 + i * 400));
   setTimeout(() => profiles.forEach(prestart), 1500); // after the visible panes had their start
   invoke('prune_screens', { keep: allSessions().map((s) => s.id) }).catch((e) => log('could not prune screens:', e));
   updateUndo();
-  log(`started ${APP.version}, ${allSessions().length} terminals in ${L.groups.length} groups`);
+  log(`started ${APP.version}, ${allSessions().length} terminals in ${L.groups.length} groups, ${allSessions().filter((s) => s.asleep).length} asleep`);
   // `werkbank --selftest` (main.rs): the checks in selftest.js, which is only loaded then
   if (await invoke('selftest_exe')) document.body.append(Object.assign(document.createElement('script'), { src: 'selftest.js' }));
 })();
