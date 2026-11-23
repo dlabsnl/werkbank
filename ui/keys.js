@@ -1,30 +1,56 @@
 // Keyboard shortcuts and the go-to-terminal box (Ctrl+Shift+P).
 
-// Ctrl+Shift+P: go to a terminal by typing part of its name, its topic or its group.
+// Ctrl+Shift+P: go to a terminal by typing part of its name, its topic, its label or its group. From three
+// characters on it also finds the Claude terminals (asleep ones too) whose conversation mentions what you typed, with
+// the place it was said.
+let switcherAsk = 0; // counts the lookups, so only the answer to the last one is shown
+/** @type {ReturnType<typeof setTimeout> | undefined} */
+let switcherTimer;
 function openSwitcher() {
   let box = $('#switcher');
   if (!box) {
     box = document.createElement('div');
     box.id = 'switcher';
-    box.innerHTML = '<input placeholder="Go to terminal…" spellcheck="false"><div class="sw-list"></div>';
+    box.innerHTML = '<input placeholder="Go to terminal, or search the conversations…" spellcheck="false"><div class="sw-list"></div>';
     document.body.append(box);
   }
   // the box is made with both just above
   const inp = /** @type {HTMLInputElement} */ (box.querySelector('input')), list = /** @type {HTMLElement} */ (box.querySelector('.sw-list'));
   const all = groupTree(L.groups).flatMap(({ g }) => g.sessions.map((s) => ({ s, g })));
-  /** @type {{ s: Session, g: Group }[]} */
-  let hits = [], i = 0;
+  /** @type {{ s: Session, g: Group, snippet?: string }[]} */
+  let hits = [];
+  /** @type {{ s: Session, g: Group, snippet: string }[]} */
+  let said = [];
+  let i = 0;
   const render = () => {
     const words = inp.value.toLowerCase().split(/\s+/).filter(Boolean);
-    hits = all.filter(({ s, g }) => words.every((w) => `${label(s)} ${s.name} ${groupPath(L.groups, g)}`.toLowerCase().includes(w)));
+    const named = all.filter(({ s, g }) => words.every((w) => `${label(s)} ${s.name} ${s.tag ?? ''} ${groupPath(L.groups, g)}`.toLowerCase().includes(w)));
+    // by name first, then the ones that only mention it in their conversation
+    hits = [...named, ...said.filter((x) => !named.some((n) => n.s.id === x.s.id))];
     i = Math.max(0, Math.min(i, hits.length - 1));
-    list.innerHTML = hits.map(({ s, g }, k) => {
-      const st = dotState(rt.get(s.id));
-      return `<button data-k="${k}" class="${st}${k === i ? ' on' : ''}"><span class="dot" title="${DOTS[st]}"></span>${progIcon(s.profile, 16)}<span>${esc(label(s))}</span><small>${esc(g.name)}</small></button>`;
+    list.innerHTML = hits.map(({ s, g, snippet }, k) => {
+      const st = dotState(s);
+      return `<button data-k="${k}" class="${st}${k === i ? ' on' : ''}">${dotHtml(st)}${progIcon(s.profile, 16)}<span>${esc(label(s))}</span>${tagHtml(s)}<small>${esc(snippet ?? g.name)}</small></button>`;
     }).join('') || '<p>No terminal matches</p>';
     list.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
   };
-  const close = () => { box.hidden = true; };
+  // the conversations are read in Rust, off the window's thread, a moment after the last key; an answer to an older
+  // text (or for a closed box) is dropped
+  const lookUp = () => {
+    const text = inp.value.trim(), n = ++switcherAsk;
+    said = [];
+    clearTimeout(switcherTimer);
+    if (text.length < 3) return;
+    switcherTimer = setTimeout(async () => {
+      /** @type {Awaited<ReturnType<typeof searchConversations>>} */
+      let found = [];
+      try { found = await searchConversations(text, true); } catch (e) { log('conversation search failed:', e); }
+      if (n !== switcherAsk || box.hidden) return;
+      said = found;
+      render();
+    }, 300);
+  };
+  const close = () => { box.hidden = true; switcherAsk++; clearTimeout(switcherTimer); };
   const go = (/** @type {number} */ k) => {
     const h = hits[k];
     close();
@@ -34,7 +60,7 @@ function openSwitcher() {
   box.hidden = false;
   render();
   inp.focus();
-  inp.oninput = () => { i = 0; render(); };
+  inp.oninput = () => { i = 0; lookUp(); render(); };
   inp.onkeydown = (e) => {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
@@ -76,6 +102,7 @@ function shortcut(e, term) {
     e.preventDefault();
     return true;
   }
+  if (e.ctrlKey && !e.altKey && e.key === 'Tab') { cycle(e.shiftKey ? -1 : 1); e.preventDefault(); return true; }
   if (!e.ctrlKey || e.altKey || e.shiftKey) return false;
   if (['Equal', 'Minus', 'Digit0'].includes(e.code)) {
     setFont(e.code === 'Digit0' ? 14 : L.fontSize + (e.code === 'Equal' ? 1 : -1));
@@ -83,7 +110,6 @@ function shortcut(e, term) {
     return true;
   }
   if (/^[1-9]$/.test(e.key)) { const s = allSessions()[Number(e.key) - 1]; if (s) reveal(s.id); e.preventDefault(); return true; }
-  if (e.key === 'Tab') { cycle(); e.preventDefault(); return true; }
   if (!term) return false;
   if (e.key.toLowerCase() === 'v') return true; // let the browser paste event deliver the clipboard text to xterm
   if (e.key.toLowerCase() === 'c' && term.hasSelection()) { copySelection(term); return true; }
@@ -100,7 +126,7 @@ window.addEventListener('keydown', (e) => {
     const all = sidebarOrder();
     return selectRange(all[0], all[all.length - 1], false);
   }
-  if (!typing && e.key === 'Delete' && selected.size) return closeSelected(true);
+  if (!typing && e.key === 'Delete' && selected.size) return deleteSelected();
   if (e.key === 'Escape') {
     if (clearSelection()) return;
     if (!pageEl.hidden) return closeSettings();
@@ -108,6 +134,9 @@ window.addEventListener('keydown', (e) => {
   }
   shortcut(e, null);
 });
+// letting go of Ctrl ends a Ctrl+Tab walk (capture: also when the key comes from inside a terminal)
+window.addEventListener('keyup', (e) => { if (e.key === 'Control') endCycle(); }, true);
+window.addEventListener('blur', endCycle);
 $('#undo').onclick = undo;
 $('#sidetoggle').onclick = toggleSide;
 $('#sideopen').onclick = () => setSideMode('open');

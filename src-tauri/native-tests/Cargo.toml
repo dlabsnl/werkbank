@@ -1,0 +1,16 @@
+# Runs the tests of the modules that only need serde_json on the build machine itself (build.sh): the Windows test
+# program (werkbank-tests.exe) cannot run there, and the whole app does not build for Linux.
+[package]
+name = "werkbank-native-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "../src/transcript.rs"
+
+[dependencies]
+serde_json = "1"
+
+# not part of the app's package
+[workspace]

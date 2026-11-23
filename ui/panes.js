@@ -80,6 +80,7 @@ function toggleZoom() {
 function renderView() {
   const before = document.activeElement;
   buildView();
+  noteActive();
   renderSide();
   save();
   requestAnimationFrame(() => settleView(before));
@@ -127,7 +128,14 @@ function settleView(before) {
     // a terminal closed before this frame is gone by now
     const r = rt.get(id), f = findSession(id);
     if (!r || !f) continue;
-    if (shown.includes(id)) try { r.fit.fit(); } catch {}
+    if (shown.includes(id)) {
+      try { r.fit.fit(); } catch {}
+      // Taking a pane out of the page (every rebuild) puts its scrollbar back at the top while xterm keeps showing the
+      // same lines, so the first turn of the wheel down jumped to the top. One line there and back makes xterm set it.
+      const b = r.term.buffer.active, d = b.viewportY < b.baseY ? 1 : -1;
+      r.term.scrollLines(d);
+      r.term.scrollLines(-d);
+    }
     if (!r.running && !r.exited && !r.starting) start(f.s);
   }
   if (!pageEl.hidden) return;
@@ -142,6 +150,7 @@ function settleView(before) {
 function setActive(id) {
   if (L.active === id) return;
   L.active = id;
+  noteActive();
   const r = rt.get(id);
   if (r) r.attn = false; // you are looking at it now
   const n = visible().length;
@@ -208,16 +217,31 @@ function splitActive(dir) {
   if (f && visible().includes(L.active)) newSession(f.g, groupProfile(f.g), { target: L.active, dir });
 }
 
-function cycle() {
-  const ids = visible();
-  if (ids.length > 1) {
-    const next = ids[((L.active ? ids.indexOf(L.active) : -1) + 1) % ids.length];
-    if (zoomed) return show(next, false);
-    setActive(next);
-    return rt.get(next)?.term.focus();
+// Ctrl+Tab works like Alt+Tab: to the terminal used before this one; more Tabs while Ctrl is held go further back
+// (Shift+Tab: one step forward again), and letting go of Ctrl makes the one you ended on the most recent.
+// shortcut: the order lives in memory only, after a restart it starts from the sidebar order.
+/** @type {string[]} */
+let recent = []; // terminal ids, most recently active first
+/** @type {{ order: string[], i: number } | null} */
+let walk = null;
+function noteActive() {
+  if (!walk && L.active && recent[0] !== L.active) recent = [L.active, ...recent.filter((x) => x !== L.active)];
+}
+/** @param {number} step 1 = further back, -1 = forward again */
+function cycle(step) {
+  if (!walk) {
+    const ids = allSessions().map((s) => s.id), order = [...recent.filter((x) => ids.includes(x)), ...ids.filter((x) => !recent.includes(x))];
+    walk = { order: L.active ? [L.active, ...order.filter((x) => x !== L.active)] : order, i: 0 };
   }
-  const all = allSessions(), i = all.findIndex((s) => s.id === L.active);
-  if (all.length) show(all[(i + 1) % all.length].id, false);
+  const n = walk.order.length;
+  if (n < 2) return;
+  walk.i = (walk.i + step + n) % n;
+  show(walk.order[walk.i], false);
+}
+function endCycle() {
+  if (!walk) return;
+  walk = null;
+  noteActive();
 }
 
 // Alt+arrow: to the nearest pane in that direction (by where the panes are on screen). False when there is none.

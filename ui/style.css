@@ -57,8 +57,9 @@ aside input { flex: 1; min-width: 0; height: 24px; background: var(--bg); border
 :root.side-collapsed .ghead > .ginit { display: grid; place-items: center; width: 26px; height: 20px; border-radius: 6px;
   font-size: 11px; font-weight: 700; color: var(--gc, var(--mut)); background: color-mix(in srgb, var(--gc, var(--mut)) 16%, transparent); }
 :root.side-collapsed .sess { position: relative; justify-content: center; height: 38px; padding: 0; }
-:root.side-collapsed .sess .sname, :root.side-collapsed .sess button { display: none; }
+:root.side-collapsed .sess .sname, :root.side-collapsed .sess .stag, :root.side-collapsed .sess button { display: none; }
 :root.side-collapsed .sess .dot { position: absolute; top: 5px; right: 6px; }
+:root.side-collapsed .sess:is(.busy, .done, .asleep) .dot { top: 3px; right: 3px; }
 :root.side-collapsed .sess .picon { width: 22px; height: 22px; }
 :root.side-collapsed .side-foot { flex-direction: column; align-items: center; }
 :root.side-auto #sidezone { display: block; position: fixed; left: 0; top: 0; bottom: 0; width: 6px; z-index: 29; }
@@ -82,7 +83,22 @@ aside { width: var(--side-w, 240px); flex: none; display: flex; flex-direction: 
 .side-head > span:last-child { display: flex; gap: 2px; }
 .icon-btn:disabled { opacity: .3; cursor: default; background: none; }
 .gdot { width: 8px; height: 8px; flex: none; margin-right: 6px; border-radius: 50%; }
-.sess[style*="--sc"] { box-shadow: inset 3px 0 0 var(--sc); }
+.sess[style*="--sc"] { box-shadow: inset 3px 0 0 var(--sc); } /* only a terminal's own color: its group's shows as the glow below */
+/* a group's color as a glow over its whole block (header and terminals): solid edge on the left, fading to the right.
+   Before the drop rules below so those still win. */
+.group[style*="--gc"] { box-shadow: inset 3px 0 0 var(--gc);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--gc) 30%, transparent), color-mix(in srgb, var(--gc) 7%, transparent) 75%); }
+/* a subgroup of a colored group: indented inside the block (padding, not margin), so the top group's glow runs the
+   whole length; with a color of its own, that glow starts after the indent */
+.group[style*="--tc"] { margin-left: 0; padding-left: calc(var(--d) * 14px); box-shadow: inset 3px 0 0 var(--tc);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--tc) 30%, transparent), color-mix(in srgb, var(--tc) 7%, transparent) 75%); }
+.group.own[style*="--tc"] { background:
+  linear-gradient(var(--gc), var(--gc)) content-box no-repeat 0 0 / 3px 100%,
+  linear-gradient(90deg, color-mix(in srgb, var(--gc) 30%, transparent), color-mix(in srgb, var(--gc) 7%, transparent) 75%) content-box,
+  linear-gradient(color-mix(in srgb, var(--tc) 28%, transparent), color-mix(in srgb, var(--tc) 28%, transparent)) no-repeat 0 0 / calc(var(--d) * 14px) 100%; }
+:root.side-collapsed .group[style*="--tc"] { padding-left: 0; }
+.group.joined-top { border-top-left-radius: 0; border-top-right-radius: 0; }
+.group.joined-bottom { border-bottom-left-radius: 0; border-bottom-right-radius: 0; margin-bottom: 0; }
 /* a terminal's (or its group's) color as a bar along the top of its pane */
 .pane::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; z-index: 4; background: var(--pc, transparent); }
 .swatches { display: grid; grid-template-columns: repeat(9, 22px); gap: 6px; padding: 6px; }
@@ -98,6 +114,8 @@ aside { width: var(--side-w, 240px); flex: none; display: flex; flex-direction: 
 #groups .sess.attn { background: color-mix(in srgb, #f59e0b 18%, transparent); box-shadow: inset 3px 0 0 #f59e0b;
   color: var(--fg); animation: attn-row 1s ease-in-out 5; }
 .sfront { display: flex; color: #f59e0b; opacity: .8; }
+.stag { flex: none; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 6px; border-radius: 8px;
+  font-size: 11px; line-height: 1.3; color: var(--mut); border: 1px solid var(--edge); }
 @keyframes attn-row { 50% { background: color-mix(in srgb, #f59e0b 40%, transparent); } }
 .pane.attn { animation: attn-pane .5s ease-in-out 4; }
 @keyframes attn-pane { 50% { border-color: #f59e0b; box-shadow: inset 0 0 0 2px #f59e0b; } }
@@ -154,6 +172,16 @@ button.armed { color: #fff; background: #e5484d; }
 .running .dot { background: #3fb950; }
 .unread .dot { background: var(--acc); box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc) 25%, transparent); }
 .exited .dot { background: #e5484d; }
+/* Claude working: a turning ring; not working (finished or waiting for you): a check */
+.busy .dot { width: 10px; height: 10px; background: none; border: 2px solid #3fb950; border-right-color: transparent; animation: spin 1.2s linear infinite; }
+.done .dot { width: 12px; height: 12px; background: none; color: #3fb950; display: grid; place-items: center; }
+.done .dot svg { stroke-width: 2.4; }
+.asleep .dot { width: 12px; height: 12px; background: none; color: var(--mut); display: grid; place-items: center; }
+#mem { margin-right: auto; align-self: center; padding-left: 6px; color: var(--mut); font-size: 12px; font-variant-numeric: tabular-nums; }
+:root.side-collapsed #mem { display: none; }
+#mem.over { color: #f59e0b; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .busy .dot { animation: none; } }
 
 #side-gutter { flex: none; width: 6px; margin: 0 -3px; z-index: 2; position: relative; cursor: col-resize; }
 #side-gutter::after { content: ""; position: absolute; inset: 0 2px; border-radius: 2px; transition: background .12s; }
@@ -221,8 +249,8 @@ body.dnd, body.dnd * { cursor: grabbing !important; }
 .sw-list { max-height: 360px; overflow: auto; margin-top: 6px; }
 .sw-list button { display: flex; align-items: center; gap: 10px; width: 100%; height: 34px; padding: 0 10px; text-align: left; color: var(--fg); }
 .sw-list button.on { background: color-mix(in srgb, var(--acc) 22%, transparent); }
-.sw-list button > span:not(.dot) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sw-list small { color: var(--mut); }
+.sw-list button > span:not(.dot):not(.stag) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sw-list small { flex: none; max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--mut); }
 .sw-list p { margin: 10px; color: var(--mut); }
 .pane:hover .pbar button[data-split] { display: grid; }
 /* drop zone preview when dragging a session onto a pane edge */
@@ -266,15 +294,21 @@ button.primary:hover { color: #fff; background: color-mix(in srgb, var(--acc) 85
 #menu button svg { color: var(--mut); }
 #menu button:disabled { opacity: .4; cursor: default; background: none; }
 #menu small { display: block; color: var(--mut); font-size: 11.5px; }
-#menu [data-gs] { border-top: 1px solid var(--edge); border-radius: 0 0 6px 6px; }
+#menu .msep { height: 1px; margin: 4px 2px; background: var(--edge); }
+#menu button.armed { color: #fff; background: #e5484d; }
+#menu button.armed svg, #menu button.armed small { color: inherit; }
 .mcount { display: flex; align-items: center; gap: 3px; padding: 4px 6px 8px 10px; margin-bottom: 4px;
   border-bottom: 1px solid var(--edge); color: var(--mut); font-size: 12px; }
 .mcount span { flex: 1; }
 #menu .mcount button { padding: 2px 9px; }
 #menu .mcount button.on { color: #fff; background: var(--acc); }
 
-/* settings page, shown over the terminal area */
-#settings-page { position: absolute; inset: 0; z-index: 10; overflow: auto; overflow-x: hidden; padding: 32px 40px 56px; background: var(--bg); }
+/* settings: a panel that slides in from the right over the terminals, so a change shows on them right away */
+#settings-page { position: absolute; top: 0; right: 0; bottom: 0; width: min(620px, 100%); z-index: 10; overflow: auto; overflow-x: hidden;
+  padding: 24px 28px 56px; background: var(--bg); border-left: 1px solid var(--edge); box-shadow: -16px 0 40px #0006;
+  animation: sp-in .18s ease-out; }
+@keyframes sp-in { from { transform: translateX(32px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { #settings-page { animation: none; } }
 #settings-page[hidden] { display: none; }
 .sp-inner { max-width: 940px; margin: 0 auto; }
 .sp-head { display: flex; align-items: center; justify-content: space-between; }
@@ -358,7 +392,7 @@ input.switch:checked::before { transform: translateX(16px); }
 .pf-foot small { font-size: 12px; }
 button.link { padding: 0; color: var(--acc); text-decoration: underline; }
 .hint { margin: 12px 0 4px; color: var(--mut); font-size: 12px; }
-.gf { display: grid; grid-template-columns: 140px 190px 1fr auto; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--edge); }
+.gf { display: grid; grid-template-columns: 120px 150px 1fr auto; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--edge); }
 .gf:last-child { border-bottom: 0; }
 .gf b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* the group Settings was opened for (right click > Profile and folder) */

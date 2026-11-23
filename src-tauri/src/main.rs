@@ -1,12 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod api;
+mod away;
 mod editor;
 mod expand;
 mod icon;
+mod memory;
 mod notify;
 mod pty;
 mod store;
+mod transcript;
 
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -124,7 +127,49 @@ fn selftest_done(app: AppHandle, report: String, passed: bool) {
     app.exit(i32::from(!passed));
 }
 
+/// Shows the (hidden) selftest window off every screen, as a tool window (which Alt+Tab leaves out) and without
+/// taking the focus. `skip_taskbar` alone only removes the taskbar button.
+#[cfg(windows)]
+fn out_of_sight(w: &tauri::WebviewWindow) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_BOTTOM,
+        SWP_NOACTIVATE, SWP_NOSIZE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    };
+    let Ok(h) = w.hwnd() else {
+        return;
+    };
+    let h = HWND(h.0);
+    // SAFETY: `h` is a live top-level window of this process; these calls only change its style, place and
+    // visibility.
+    unsafe {
+        let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+        let _ = SetWindowLongPtrW(
+            h,
+            GWL_EXSTYLE,
+            (ex | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize),
+        );
+        let _ = SetWindowPos(
+            h,
+            Some(HWND_BOTTOM),
+            -20000,
+            -20000,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+    }
+}
+
+#[cfg(not(windows))]
+fn out_of_sight(_: &tauri::WebviewWindow) {}
+
 fn bring_to_front(app: &AppHandle) {
+    // the selftest stays behind your work, also when a check makes a terminal come forward
+    if store::SELFTEST_DIR.get().is_some() {
+        return;
+    }
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
         let _ = w.show();
@@ -161,7 +206,7 @@ fn launch_target() -> Option<String> {
 }
 
 fn main() {
-    // `werkbank list|open|close|send|help` from inside a Werkbank terminal is a command-line client, not a second window;
+    // `werkbank list|open|send|wait|...` (api::COMMANDS) from inside a Werkbank terminal is a command-line client, not a second window;
     // plain `werkbank` inside one prints the help instead of starting another instance on the same layout.
     let args: Vec<String> = std::env::args().skip(1).collect();
     // `werkbank --selftest` runs ui/selftest.js against this exe in a throwaway folder (with two cmd profiles),
@@ -170,9 +215,9 @@ fn main() {
     let inside = std::env::var_os("WERKBANK_ADDR").is_some();
     if !selftest
         && (inside
-            || args.first().is_some_and(|a| {
-                ["list", "open", "close", "send", "help", "--help", "-h"].contains(&a.as_str())
-            }))
+            || args
+                .first()
+                .is_some_and(|a| api::COMMANDS.contains(&a.as_str())))
     {
         std::process::exit(api::run_cli(&args));
     }
@@ -233,6 +278,28 @@ fn main() {
         )
         .setup(move |app| {
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
+            // the window is made here (`"create": false` in tauri.conf.json), so the selftest can open it out of the way
+            let mut window =
+                tauri::WebviewWindowBuilder::from_config(app.handle(), &app.config().app.windows[0])?;
+            if selftest {
+                // off every screen, without the focus, a taskbar button or a place in Alt+Tab: you keep working
+                // and never see it
+                // (made hidden: tao ignores a start position off every monitor, out_of_sight moves and shows it)
+                window = window
+                    .visible(false)
+                    .focused(false)
+                    .skip_taskbar(true)
+                    // a window off screen counts as hidden for WebView2, which would slow the timers the checks
+                    // wait on; wry's own defaults (msWebOOUI, ...) are repeated because this replaces them
+                    .additional_browser_args(
+                        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion \
+                         --disable-background-timer-throttling --disable-renderer-backgrounding",
+                    );
+            }
+            let main_window = window.build()?;
+            if selftest {
+                out_of_sight(&main_window);
+            }
             // started by a click on a notification: the UI asks for that terminal once it is up
             if let Some(id) = notify::link_target(app.handle(), &args) {
                 let _ = LAUNCH_TARGET.set(id);
@@ -243,7 +310,10 @@ fn main() {
             }
             // Win+Ctrl+W: Win+Shift / Win+Alt combinations are often taken by other tools, and Ctrl+Alt is AltGr
             // on many keyboards. Taken anyway: Werkbank works without it.
-            let _ = app.global_shortcut().register("super+control+KeyW");
+            // (not for the selftest: without a running Werkbank it would take the shortcut away from the next one)
+            if !selftest {
+                let _ = app.global_shortcut().register("super+control+KeyW");
+            }
             Ok(())
         })
         .manage(pty::Ptys::default())
@@ -282,9 +352,15 @@ fn main() {
             quit,
             pty::spawn,
             pty::has_conversation,
+            pty::conversation_title,
+            pty::conversation_answer,
+            pty::search_conversations,
+            away::idle_seconds,
+            away::away_run,
             pty::write,
             pty::resize,
-            pty::kill
+            pty::kill,
+            pty::memory
         ])
         .run(tauri::generate_context!())
         .expect("error while running werkbank");

@@ -13,20 +13,56 @@ function showMenu(left, top) {
 /** @typedef {(p: Profile, e: MouseEvent, n: number) => unknown} PickProfile opens profile p, n terminals at once */
 const swatches = (/** @type {string | undefined} */ current) => `<div class="swatches">${COLORS.map((c) => `<button data-color="${c}" class="${c === current ? 'on' : ''}" style="--c:${c}" title="${c}"></button>`).join('')}
     <button data-color="" class="none${current ? '' : ' on'}" title="No color">${icon('x', 12)}</button></div>`;
-// Right click on a group row: its color, and a way to its profile and folder in Settings > Groups.
+// A menu row: icon html, text and an optional hint below it; `a` is what it does.
+/** @param {string} a @param {string} ic @param {string} text @param {{ off?: boolean, hint?: string }} [o] */
+const menuItem = (a, ic, text, o = {}) => `<button data-a="${a}"${o.off ? ' disabled' : ''}>${ic}<span>${text}${o.hint ? `<small>${o.hint}</small>` : ''}</span></button>`;
+const menuSep = '<i class="msep"></i>';
+
+// Right click on a group row: its color, everything the row's buttons do, its profile and folder, and deleting it.
 /** @param {MenuAt} at @param {Group} g */
 function openGroupMenu(at, g) {
-  menuEl.innerHTML = `${swatches(g.color)}<button data-gs>${progIcon(groupProfile(g).name, 16)}<span>Profile and folder…
-    <small>${esc(groupProfile(g).name)}${g.cwd ? ` · ${esc(g.cwd)}` : ''}</small></span></button>`;
+  const below = subtree(L.groups, g), all = below.flatMap((x) => x.sessions), p = groupProfile(g);
+  const lockedIn = below.some((x) => isLocked(L.groups, x)), closable = below.some((x) => x.sessions.length && !isLocked(L.groups, x));
+  const n = (/** @type {number} */ k, /** @type {string} */ one) => `${k} ${one}${k === 1 ? '' : 's'}`;
+  const what = [all.length && n(all.length, 'terminal'), below.length > 1 && n(below.length - 1, 'subgroup')].filter(Boolean).join(' and ');
+  const sleepy = all.filter(canSleep);
+  menuEl.innerHTML = swatches(g.color)
+    + menuItem('add', icon('plus'), 'New terminal', { hint: `${esc(p.name)}${g.cwd ? ` · ${esc(g.cwd)}` : ''}` })
+    + menuItem('pick', icon('plus'), 'New terminal with…', { hint: 'Choose the profile, or several at once' })
+    + menuItem('subgroup', icon('folderPlus'), 'New group inside')
+    + menuItem('tile', icon('grid'), 'Show the whole group', { off: !all.length })
+    + menuItem('sleep', icon('moon'), 'Sleep its waiting terminals', sleepy.length ? { hint: `${n(sleepy.length, 'terminal')}: frees their memory` }
+      : { off: true, hint: 'None: only Claude terminals out of view that wait for you' })
+    + menuSep
+    + menuItem('rename', icon('pencil'), 'Rename', { hint: 'Or double-click the name' })
+    + menuItem('lock', icon(g.locked ? 'lock' : 'unlock'), g.locked ? 'Unlock' : 'Lock', { hint: g.locked ? 'It can be removed again' : 'It, its subgroups and their terminals cannot be removed' })
+    + menuItem('gs', progIcon(p.name, 16), 'Profile and folder…', { hint: 'For new terminals in this group' })
+    + menuSep
+    + (closable ? menuItem('closeall', icon('trash'), 'Close all terminals', { hint: 'Click twice · Ctrl+Z brings them back' }) : '')
+    + menuItem('delgroup', icon('trash'), 'Delete group', lockedIn ? { off: true, hint: 'Locked: unlock it first' }
+      : { hint: what ? `With its ${what} · Ctrl+Z brings it back` : 'Ctrl+Z brings it back' });
   showMenu(at.x, at.y);
   menuEl.onclick = (e) => {
-    const t = /** @type {Element} */ (e.target), c = /** @type {HTMLElement | null} */ (t.closest('[data-color]')), gs = t.closest('[data-gs]');
-    if (c || gs) menuEl.hidden = true;
-    if (gs) return openSettings(`#group-${g.id}`);
-    if (!c) return;
-    checkpoint(`color of ${g.name}`);
-    g.color = c.dataset.color || undefined;
-    renderView();
+    const t = /** @type {Element} */ (e.target), c = /** @type {HTMLElement | null} */ (t.closest('[data-color]'));
+    if (c) {
+      menuEl.hidden = true;
+      checkpoint(`color of ${g.name}`);
+      g.color = c.dataset.color || undefined;
+      return renderView();
+    }
+    const b = /** @type {HTMLElement | null} */ (t.closest('[data-a]')), a = b?.dataset.a;
+    if (!b || !a) return;
+    if (a === 'pick') return openMenu(at, addToGroup(g));
+    menuEl.hidden = true;
+    if (a === 'gs') return openSettings(`#group-${g.id}`);
+    if (a === 'sleep') return sleepy.forEach((s) => sleep(s, 'by hand'));
+    groupAct(g, a, e);
+    // the first click on a stop only armed it: keep the menu open with the row red, like the sidebar buttons
+    if ((a === 'closeall' && armed === `g:${g.id}`) || (a === 'delgroup' && armed === `d:${g.id}`)) {
+      menuEl.hidden = false;
+      b.classList.add('armed');
+      setTimeout(() => b.classList.remove('armed'), 3000);
+    }
   };
 }
 
@@ -34,10 +70,20 @@ function openGroupMenu(at, g) {
 /** @param {MenuAt} at @param {Session} s */
 function openSessionMenu(at, s) {
   menuEl.innerHTML = `${swatches(s.color)}<button data-front>${icon('bell', 16)}<span>${s.front ? '✓ ' : ''}Bring to front when done
-    <small>Shows it and brings Werkbank forward</small></span></button>`;
+    <small>Shows it and brings Werkbank forward</small></span></button>`
+    + menuItem('sleep', icon('moon'), 'Sleep now', canSleep(s) ? { hint: 'Frees its memory; showing it continues the conversation' }
+      : { off: true, hint: 'Only a Claude terminal out of view that waits for you' })
+    + menuItem('awake', icon('sun'), `${s.awake ? '✓ ' : ''}Keep awake`, { hint: 'Never sleeps, e.g. while a loop or a scheduled task runs in it' });
   showMenu(at.x, at.y);
   menuEl.onclick = (e) => {
     const t = /** @type {Element} */ (e.target), c = /** @type {HTMLElement | null} */ (t.closest('[data-color]')), fr = t.closest('[data-front]');
+    if (t.closest('[data-a="sleep"]')) { menuEl.hidden = true; return sleep(s, 'by hand'); }
+    if (t.closest('[data-a="awake"]')) {
+      menuEl.hidden = true;
+      checkpoint(`keep awake ${s.name}`);
+      s.awake = !s.awake || undefined;
+      return renderView();
+    }
     if (!c && !fr) return;
     menuEl.hidden = true;
     checkpoint(`${fr ? 'bring to front' : 'color'} ${s.name}`);
@@ -106,7 +152,7 @@ async function pasteInto(term) {
 // Right click in a terminal: copy / paste / find / split / hide.
 /** @param {Session} s @param {Runtime} r @param {MenuAt} at */
 function terminalMenu(s, r, at) {
-  const sel = r.term.hasSelection(), item = (/** @type {string} */ a, /** @type {string} */ ic, /** @type {string} */ text, /** @type {boolean} */ off = false) => `<button data-a="${a}"${off ? ' disabled' : ''}>${icon(ic)}<span>${text}</span></button>`;
+  const sel = r.term.hasSelection(), item = (/** @type {string} */ a, /** @type {string} */ ic, /** @type {string} */ text, off = false) => menuItem(a, icon(ic), text, { off });
   menuEl.innerHTML = item('copy', 'copy', 'Copy', !sel) + item('paste', 'paste', 'Paste') + item('find', 'search', 'Find… (Ctrl+Shift+F)')
     + item('row', 'splitRight', 'Split right') + item('col', 'splitDown', 'Split down') + item('hide', 'x', 'Hide from view');
   showMenu(at.x, at.y);

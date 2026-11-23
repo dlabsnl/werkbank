@@ -51,6 +51,16 @@
     await wait(100);
     ok('the find box keeps the keyboard when the view redraws', document.activeElement === q(R(a.id).pane, '.find input'));
     closeFind(R(a.id));
+    // a rebuild takes the panes out of the page; a wheel turn down afterwards must not jump to the top (#1041)
+    const ra = R(a.id), vp = q(ra.pane, '.xterm-viewport');
+    ra.term.write('x\r\n'.repeat(300));
+    await wait(300);
+    renderView();
+    await wait(200);
+    const bottom = ra.term.buffer.active.viewportY;
+    vp.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, bubbles: true, cancelable: true }));
+    await wait(200);
+    ok(`after a redraw the wheel down stays at the bottom (line ${ra.term.buffer.active.viewportY} of ${bottom})`, bottom > 0 && ra.term.buffer.active.viewportY === bottom);
 
     // menus (menus.js)
     openMenu({ x: 30, y: 30 }, () => {});
@@ -147,6 +157,7 @@
     setActive(a.id);
     R(b.id).term.write('\x1b]0;◐ Busy\x07');
     await wait(200);
+    ok('Claude working: its row shows the turning ring', !!groupsEl.querySelector(`[data-s="${b.id}"].busy`));
     R(b.id).term.write('\x1b]0;✳ Busy\x07');
     await wait(300);
     ok('Claude done (title ◐ to ✳): attention', !!R(b.id).attn && !!groupsEl.querySelector(`[data-s="${b.id}"].attn`));
@@ -164,6 +175,11 @@
     ok('Claude busy again by itself: attention taken back', !R(b.id).attn && !groupsEl.querySelector(`[data-s="${b.id}"].attn`));
     R(b.id).term.write('\x1b]9;4;0;\x07');
     await wait(100);
+    setActive(b.id); // looked at: no longer attention, but still recognizably done
+    renderSide();
+    ok('Claude done and seen: a check, not the running dot', !!groupsEl.querySelector(`[data-s="${b.id}"].done .dot svg`));
+    ok('a shell never gets the ring or the check (it reports no work)', !!groupsEl.querySelector(`[data-s="${a.id}"]:not(.busy):not(.done)`));
+    setActive(a.id);
     const old = must(findSession(b.id), 'b').s, oldGroup = must(findSession(b.id), 'b').g;
     checkpoint('selftest');
     old.name = 'Renamed';
@@ -171,6 +187,24 @@
     ok('undo restores in place: terminals and groups keep their objects', must(findSession(b.id), 'b').s === old && must(findSession(b.id), 'b').g === oldGroup && old.name !== 'Renamed');
     removeSession('gone'); // already removed: no error
     setActive(b.id);
+
+    // group color: a glow over the whole group block; a terminal row only shows its own color (sidebar.js, style.css)
+    group().color = '#3b82f6';
+    renderSide();
+    ok('group color: glow over the whole group, not a bar per row',
+      getComputedStyle(q(groupsEl, `[data-g="${group().id}"]`)).backgroundImage.includes('gradient') && !q(groupsEl, `[data-s="${b.id}"]`).style.getPropertyValue('--sc'));
+    /** @type {Group} */
+    const csub = { id: uid(), name: 'Colored sub', collapsed: false, sessions: [], parent: group().id };
+    L.groups.push(csub);
+    renderSide();
+    const subEl = q(groupsEl, `[data-g="${csub.id}"]`);
+    ok('group color: a subgroup continues it, also in its indent', getComputedStyle(subEl).marginLeft === '0px' && subEl.style.getPropertyValue('--tc') === '#3b82f6');
+    csub.color = '#ef4444';
+    renderSide();
+    ok('group color: a subgroup with its own color keeps the top color in its indent', q(groupsEl, `[data-g="${csub.id}"]`).classList.contains('own'));
+    L.groups = L.groups.filter((x) => x !== csub);
+    group().color = undefined;
+    renderSide();
 
     // bring to front when done (attention.js, menus.js)
     q(groupsEl, `[data-s="${b.id}"]`).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 50 }));
@@ -181,11 +215,43 @@
     ok('done: it comes to the front', visible().includes(b.id) && L.active === b.id);
     must(findSession(b.id), 'b').s.front = undefined;
 
+    // group menu (menus.js, sidebar.js): what the row buttons do, and deleting a group with what is in it
+    /** @type {Group} */
+    const dg = { id: uid(), name: 'To delete', collapsed: false, sessions: [] };
+    L.groups.push(dg, { id: uid(), name: 'Sub', collapsed: false, sessions: [], parent: dg.id });
+    const dt = newSession(dg, profiles[0], { target: a.id, dir: 'row' }, 'Del');
+    await wait(1500);
+    q(groupsEl, `[data-g="${dg.id}"] .ghead`).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 50, clientY: 50 }));
+    ok('group menu: new terminal, rename, lock, profile, close all, delete', !menuEl.hidden
+      && ['add', 'pick', 'subgroup', 'tile', 'rename', 'lock', 'gs', 'closeall', 'delgroup'].every((x) => !!menuEl.querySelector(`[data-a="${x}"]`)));
+    q(menuEl, '[data-a="delgroup"]').click();
+    ok('group menu: delete with a running terminal first arms', !menuEl.hidden && armed === `d:${dg.id}` && L.groups.includes(dg));
+    q(menuEl, '[data-a="lock"]').click();
+    ok('group menu: another row while delete is armed just acts and closes the menu', menuEl.hidden && dg.locked === true);
+    dg.locked = false;
+    q(groupsEl, `[data-g="${dg.id}"] .ghead`).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 50, clientY: 50 }));
+    q(menuEl, '[data-a="delgroup"]').click();
+    q(menuEl, '[data-a="delgroup"]').click();
+    ok('group menu: the second click deletes the group, its subgroup and its terminal', menuEl.hidden
+      && !L.groups.some((x) => x.id === dg.id || x.parent === dg.id) && !findSession(dt.id) && !rt.has(dt.id) && visible().length === 2);
+    undo();
+    await wait(300);
+    const dg2 = L.groups.find((x) => x.id === dg.id);
+    ok('group menu: Ctrl+Z brings the group back with what was in it', !!dg2 && L.groups.some((x) => x.parent === dg.id) && !!findSession(dt.id));
+    if (dg2) {
+      const ev = new MouseEvent('click');
+      groupAct(dg2, 'delgroup', ev);
+      if (armed === `d:${dg.id}`) groupAct(dg2, 'delgroup', ev);
+    }
+    await wait(100);
+
     // settings.js
     await openSettings();
     renderView(); // also runs while Settings is open (profile edits, undo, window focus)
     await wait(100); // the keyboard is handed back in the next frame (settleView)
     ok('settings keep the keyboard when the view redraws', !document.activeElement?.closest('.xterm'));
+    const sp = pageEl.getBoundingClientRect(), area = viewEl.getBoundingClientRect();
+    ok('settings is a panel at the right: the terminals stay in view', sp.right >= area.right - 1 && sp.width < area.width - 100 && visible().length === 2);
     ok('settings: profiles and groups', !pageEl.hidden && pageEl.querySelectorAll('.pf').length === 2 && pageEl.querySelectorAll('.gf').length === 1);
     q(pageEl, '[data-zoom="110"]').click();
     await wait(300); // applySettings waits for the font first
@@ -218,6 +284,11 @@
     await openSettings();
     key('Escape');
     ok('Esc closes settings', pageEl.hidden);
+    await openSettings();
+    q(pageEl, '.pf-row').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    const stays = !pageEl.hidden;
+    q(viewEl, '.pane').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    ok('a click in settings keeps it, a click on a terminal next to it closes it', stays && pageEl.hidden);
 
     // profiles.json edited from outside: `werkbank open` finds a new profile without a restart
     const onDisk = JSON.parse(JSON.stringify(profiles));
@@ -230,6 +301,7 @@
     ok('and its removal too', profiles.length === 2);
 
     ok('a conversation that was never saved is not resumed', !(await invoke('has_conversation', { id: uid() })) && !(await invoke('has_conversation', { id: '..\\x' })));
+    ok('and has no title to show', (await invoke('conversation_title', { id: uid() })) === null && (await invoke('conversation_title', { id: '..\\x' })) === null);
     $('#showall').click();
     ok('show all terminals', visible().length === allSessions().length);
 
@@ -244,10 +316,71 @@
     removeSession(c.id);
     await wait(1000);
 
-    // keys.js
+    // keys.js: Ctrl+Tab like Alt+Tab (panes.js)
+    setActive(a.id);
+    setActive(b.id);
+    key('Tab', { code: 'Tab', ctrlKey: true });
+    const back = L.active === a.id;
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Control', code: 'ControlLeft' }));
+    key('Tab', { code: 'Tab', ctrlKey: true });
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Control', code: 'ControlLeft' }));
+    ok('Ctrl+Tab: to the previous terminal and back again', back && L.active === b.id);
     openSwitcher();
     ok('go-to-terminal box lists both', !$('#switcher').hidden && $('#switcher').querySelectorAll('[data-k]').length === 2);
     $('#switcher input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+
+    // memory (memory.js, memory.rs): Werkbank's total with everything it runs, each terminal's program, the computer
+    await tickMemory();
+    ok('memory: a total in the footer, per terminal, and the computer\'s memory', /\d (MB|GB)$/.test($('#mem').textContent ?? '') && (R(a.id).mem ?? 0) > 0 && memNow.ram > memNow.total);
+    // sleep: a resumable terminal out of view that waits for you stops, and continues when shown again
+    const pz = profiles[0], keepResume = pz.resume;
+    pz.resume = ['/k', 'echo woke-up'];
+    const z = newSession(group(), pz, null, 'Sleeper');
+    await wait(2000);
+    z.resumable = true; // its program has a conversation (Claude after the first prompt)
+    invoke('write', { id: z.id, data: 'title Kept topic\r' });
+    await wait(1000);
+    ok('the title its program sets is kept on the terminal (layout.json)', z.title === 'Kept topic' && label(z) === 'Kept topic');
+    hide(z.id);
+    z.resumable = true;
+    const rz = R(z.id);
+    rz.working = false; // what a Claude that finished reports
+    rz.draft = true;
+    ok('sleep: not with text typed but not sent', !canSleep(z));
+    rz.draft = false;
+    z.awake = true;
+    ok('sleep: not when kept awake', !canSleep(z));
+    z.awake = undefined;
+    const keepBudget = L.memBudget, keepAfter = L.sleepAfter;
+    L.memBudget = 0.0001; // a few MB: Werkbank is over it
+    L.sleepAfter = 0;
+    rz.idleSince = rz.inputAt = rz.seenAt = Date.now() - 2 * 60000;
+    await tickMemory();
+    ok('budget: not one that waited less than the minimum', rz.running && !z.asleep);
+    rz.idleSince = rz.inputAt = rz.seenAt = Date.now() - MIN_WAIT - 60000;
+    rz.busy = true;
+    ok('sleep: not while it runs something it started (a background command)', !canSleep(z));
+    await tickMemory(); // measures again: cmd started nothing, so it is not busy
+    await wait(1500);
+    L.memBudget = keepBudget;
+    L.sleepAfter = keepAfter;
+    ok('budget: over it, the one that waited long enough sleeps (saved, a moon in its row)',
+      !rz.running && !rz.exited && !!z.asleep && !!groupsEl.querySelector(`[data-s="${z.id}"].asleep .dot svg`));
+    ok('sleep: werkbank list says asleep', statusOf(z.id) === 'asleep');
+    rz.title = rz.firstTitle = undefined; // as after a restart: no program has set a title yet
+    ok('asleep after a restart it is still called by its kept title', label(z) === 'Kept topic');
+    z.custom = true;
+    ok('a name typed by hand still wins', label(z) === 'Sleeper');
+    z.custom = undefined;
+    show(z.id, false);
+    await wait(2500);
+    ok('woken when shown: it continues (resume arguments)', rz.running && !z.asleep && printed(z.id, 'woke-up'));
+    await openSettings('#memory-section');
+    ok('Settings > Memory lists every terminal with what it uses', pageEl.querySelectorAll('#mem-list .srow').length === allSessions().length);
+    closeSettings();
+    pz.resume = keepResume;
+    removeSession(z.id);
+    await wait(300);
 
     // api.js, and the real `werkbank` command over the socket (api.rs)
     ok('api: list', listTerminals()[0].terminals.length === 2);
@@ -266,6 +399,20 @@
     await wait(600);
     ok('close: a locked group refuses, a terminal closing itself goes anyway', refused && !allSessions().some((s) => s.name === 'Three'));
     g3.locked = false;
+    // Delete on a selection: a terminal in a locked group goes on the second press (sidebar.js deleteSelected)
+    await API.open({ profile: 'Cmd2', name: 'Four' });
+    const four = must(allSessions().find((s) => s.name === 'Four'), 'Four');
+    const g4 = must(findSession(four.id), 'Four').g;
+    g4.locked = true;
+    toggleSelect(four.id);
+    key('Delete');
+    ok('Delete, locked group: the first press only arms', armed === 'del' && !!findSession(four.id) && $('#selbar').textContent.includes('Delete again'));
+    key('Delete');
+    ok('Delete, locked group: the second press stops it', !findSession(four.id) && !selected.size);
+    key('z', { code: 'KeyZ', ctrlKey: true });
+    ok('Delete, locked group: Ctrl+Z brings it back', !!findSession(four.id));
+    must(findSession(four.id), 'Four').g.locked = false; // undo put back a copy of the group
+    API.close({ name: 'Four' });
     // groups inside groups (groups.js, sidebar.js, api.js)
     await API.open({ profile: 'Cmd2', group: `${group().name}/Sub`, name: 'Nested' });
     const sub = must(L.groups.find((x) => x.name === 'Sub'), 'Sub');
@@ -327,6 +474,116 @@
     invoke('write', { id: a.id, data: `cmd /c "set WERKBANK_TOKEN=wrong&& ${exe} list"\r` });
     await wait(3000);
     ok('a wrong token is refused', text(a.id).includes('wrong or missing token'));
+
+    // handing work over and getting the answer back (api.js, handoff.js): wait, read, label, search
+    /** @typedef {{ done: boolean, code: number, text: string }} Verdict */
+    const verdict = (/** @type {string} */ name) => /** @type {Verdict} */ (API.wait({ name }));
+    ok('wait: no such terminal is exit code 3', verdict('Nobody').done && verdict('Nobody').code === 3);
+    // Two reports work like Claude does (its title, above) and finished long ago
+    const rb = R(b.id);
+    rb.term.write('\x1b]0;◐ Busy\x07');
+    await wait(200);
+    rb.term.write('\x1b]0;✳ Busy\x07');
+    await wait(300);
+    ok('wait: a terminal that just finished is not done yet (it may be between two steps)', !verdict('Two').done);
+    await wait(WAIT.settle);
+    ok('wait: finished and settled is done, exit code 0', verdict('Two').done && verdict('Two').code === 0);
+    API.send({ name: 'Two', text: 'echo handed-over' });
+    ok('wait right after send: not done, the earlier "done" does not count', !verdict('Two').done);
+    await wait(3000);
+    ok('send typed it; wait still waits until the work has started', printed(b.id, 'handed-over') && !verdict('Two').done);
+    rb.term.write('\x1b]0;◐ Busy\x07');
+    await wait(200);
+    ok('wait: not done while it works', !verdict('Two').done && !!rb.job?.started);
+    rb.term.write('\x1b]0;✳ Busy\x07');
+    await wait(300 + WAIT.settle);
+    ok('wait: done once the work that was sent has ended', verdict('Two').done && verdict('Two').code === 0 && !rb.job);
+    ok('read: the end of a shell\'s screen', String(await API.read({ name: 'Two', lines: 30 })).includes('handed-over'));
+    let readRefused = false;
+    try { await API.read({ name: 'Two', lines: -1 }); } catch { readRefused = true; }
+    ok('read: --lines must be a whole number', readRefused);
+    // the real command against a shell: it is done when it has been quiet for a while. cmd does not wait for
+    // werkbank.exe at its prompt (it is no console program), hence start /wait
+    await API.open({ profile: 'Cmd2', name: 'Five' });
+    const five = must(allSessions().find((x) => x.name === 'Five'), 'Five');
+    await wait(2500);
+    invoke('write', { id: a.id, data: `${exe} send Five "ping -n 3 127.0.0.1 >nul & echo late-done"\rstart /wait ${exe} wait Five --timeout 60\recho wait-code-%errorlevel%\r` });
+    let lateDone = false;
+    for (let n = 0; n < 120 && !/^wait-code-\d/m.test(text(a.id)); n++) {
+      await wait(250);
+      lateDone = printed(five.id, 'late-done');
+    }
+    ok('werkbank wait blocks until the sent command is done and quiet, exit code 0', lateDone && printed(a.id, 'wait-code-0'));
+    invoke('write', { id: a.id, data: `${exe} read Five --lines 4\r` });
+    await wait(3000);
+    ok('werkbank read prints the other terminal\'s screen', printed(a.id, 'late-done'));
+    invoke('write', { id: a.id, data: `start /wait ${exe} wait Nobody\recho gone-code-%errorlevel%\r` });
+    await wait(3000);
+    ok('werkbank wait: exit code 3 for a terminal that is not there', printed(a.id, 'gone-code-3'));
+    API.close({ name: 'Five' });
+    // a label: set by a program on its own terminal, shown in the sidebar and the go-to box, kept out of undo
+    const tagOf = () => findSession(a.id)?.s.tag;
+    invoke('write', { id: a.id, data: `${exe} label #1072 waiting\r` });
+    await wait(3000);
+    ok('werkbank label: on the terminal it runs in, shown in its row', tagOf() === '#1072 waiting' && groupsEl.querySelector(`[data-s="${a.id}"] .stag`)?.textContent === '#1072 waiting');
+    ok('label: werkbank list shows it', listTerminals().some((x) => x.terminals.some((t) => t.id === a.id && t.label === '#1072 waiting')));
+    openSwitcher();
+    const sw = q(document, '#switcher'), swInput = /** @type {HTMLInputElement} */ (q(sw, 'input'));
+    swInput.value = '1072';
+    swInput.dispatchEvent(new Event('input'));
+    ok('go-to box: finds a terminal by its label', sw.querySelectorAll('.sw-list button').length === 1 && q(sw, '.sw-list .stag').textContent === '#1072 waiting');
+    swInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    checkpoint('selftest');
+    API.label({ name: a.id, text: `<b>${'x'.repeat(40)}` });
+    undo();
+    ok('label: cut to one short line, escaped, and not taken back by undo', tagOf() === `<b>${'x'.repeat(21)}` && !groupsEl.querySelector('.stag b'));
+    API.label({ name: a.id, text: '' });
+    ok('label: an empty text takes it off', tagOf() === undefined && !groupsEl.querySelector('.stag'));
+    // search: no Claude terminals here (two cmd profiles), so only that the question gets through
+    ok('search: nothing found without Claude conversations', /** @type {unknown[]} */ (await API.search({ text: 'handed-over' })).length === 0);
+    let searchRefused = false;
+    try { await API.search({ text: 'x' }); } catch { searchRefused = true; }
+    ok('search: needs two characters', searchRefused);
+    // the go-to box and the command ask Rust in their own way (replacing the box's earlier search, or not)
+    ok('search: both ways of asking get an answer', (await searchConversations('handed-over', true)).length === 0 && (await invoke('search_conversations', { ids: [a.id, 'not an id'], query: 'handed-over', replaces: true })).length === 0);
+    // the away command (attention.js, away.rs): off by default; a dummy command checks what it got and leaves a file
+    ok('away command: off by default', !L.awayCommand);
+    invoke('write', { id: a.id, data: 'del "%TEMP%\\wb-selftest-away.txt" 2>nul\r' });
+    setActive(a.id);
+    rb.term.write('\x1b]0;◐ Busy\x07');
+    await wait(200);
+    rb.term.write('\x1b]0;✳ Busy\x07');
+    await wait(300);
+    L.awayCommand = `cmd.exe /c "if %WERKBANK_AWAY_ID%-%WERKBANK_AWAY_MINUTES%==${b.id}-0 echo away-ok> %TEMP%\\wb-selftest-away.txt"`;
+    L.awayAfter = 30;
+    await tickAway();
+    ok('away command: not before the minutes have passed', !!rb.attn && rb.awayFor === undefined);
+    const since = rb.attnAt;
+    await wait(20);
+    attention(b.id);
+    ok('away command: a second bell while it waits does not start the wait again', rb.attnAt === since);
+    L.awayAfter = 0; // no waiting, and the PC counts as left alone
+    await tickAway();
+    ok('away command: not for a program that is not Claude, whatever its title says', rb.awayFor === undefined);
+    // from here Two counts as a Claude terminal: its profile's program is called claude (cmd keeps running in it)
+    const pb = profileOf(b), realCommand = pb.command;
+    pb.command = ['claude.exe'];
+    await tickAway();
+    await wait(1500);
+    invoke('write', { id: a.id, data: 'type "%TEMP%\\wb-selftest-away.txt"\r' });
+    await wait(1500);
+    ok('away command: runs for a finished, unseen terminal, which it gets in its environment', rb.awayFor === rb.attnAt && printed(a.id, 'away-ok'));
+    invoke('write', { id: a.id, data: 'del "%TEMP%\\wb-selftest-away.txt"\r' });
+    await tickAway();
+    await wait(1500);
+    invoke('write', { id: a.id, data: 'if not exist "%TEMP%\\wb-selftest-away.txt" echo away-once\r' });
+    await wait(1500);
+    ok('away command: once per wait', printed(a.id, 'away-once'));
+    L.awayCommand = L.awayAfter = undefined;
+    pb.command = realCommand;
+    await openSettings();
+    ok('Settings > Notifications has the away command, empty', /** @type {HTMLInputElement} */ (q(pageEl, '[data-k="awayCommand"]')).value === '' && !!pageEl.querySelector('[data-k="awayAfter"]'));
+    closeSettings();
 
     // the content security policy must not block what Werkbank itself uses
     ok('csp: program icons shown', [...document.querySelectorAll('img.picon')].some((i) => i instanceof HTMLImageElement && i.complete && i.naturalWidth > 0));

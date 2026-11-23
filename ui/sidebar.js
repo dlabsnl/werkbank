@@ -25,18 +25,28 @@ function toggleSelect(id) {
 function clearSelection() {
   if (!selected.size) return false;
   selected.clear();
-  if (armed === 'sel') armed = null;
+  if (armed === 'sel' || armed === 'del') armed = null;
   renderSide();
   return true;
 }
-// The Delete key stops them at once, like deleting in Explorer (Ctrl+Z brings them back); the button asks twice.
-function closeSelected(now = false) {
-  const ids = [...selected].filter((id) => { const f = findSession(id); return f && !isLocked(L.groups, f.g); });
-  if (!ids.length || (!now && !confirmed('sel'))) return; // all in locked groups: nothing to stop
+// The button asks twice and keeps terminals in locked groups. The Delete key stops them at once, like deleting in
+// Explorer (Ctrl+Z brings them back); with terminals of a locked group in the selection it asks twice (Delete, Delete
+// within 3 s) and then stops those too.
+/** @param {string[]} ids */
+function stopSelected(ids) {
   checkpoint(`close ${ids.length} selected`);
   dropFromGroups(ids);
-  for (const id of ids) selected.delete(id); // locked ones stay selected
+  for (const id of ids) selected.delete(id); // locked ones the button kept stay selected
   renderView();
+}
+const lockedSel = () => [...selected].filter((id) => { const f = findSession(id); return f && isLocked(L.groups, f.g); });
+function closeSelected() {
+  const kept = lockedSel(), ids = [...selected].filter((id) => findSession(id) && !kept.includes(id));
+  if (ids.length && confirmed('sel')) stopSelected(ids); // all in locked groups: nothing to stop
+}
+function deleteSelected() {
+  const ids = [...selected].filter((id) => findSession(id));
+  if (ids.length && (!lockedSel().length || confirmed('del'))) stopSelected(ids);
 }
 
 function showSelected() {
@@ -50,11 +60,11 @@ function renderSelbar() {
   for (const id of [...selected]) if (!findSession(id)) selected.delete(id);
   bar.hidden = !selected.size;
   if (!selected.size) return;
-  const sure = armed === 'sel', locked = [...selected].filter((id) => { const f = findSession(id); return f && isLocked(L.groups, f.g); }).length;
+  const sure = armed === 'sel', locked = lockedSel().length, again = armed === 'del';
   const stop = locked === selected.size
-    ? `<button disabled title="These terminals are in a locked group: unlock the group first">${icon('lock', 14)}</button>`
-    : `<button data-sel="close" class="${sure ? 'armed' : ''}" title="${sure ? 'Click again to stop them' : 'Stop and remove them (Delete · Ctrl+Z undoes)'}${locked ? ` · ${locked} in a locked group are kept` : ''}">${icon('trash', 14)}</button>`;
-  bar.innerHTML = `<span>${selected.size} selected${locked ? ` · ${locked} locked` : ''}</span>
+    ? `<button disabled title="These terminals are in a locked group: press Delete twice to stop them anyway">${icon('lock', 14)}</button>`
+    : `<button data-sel="close" class="${sure ? 'armed' : ''}" title="${sure ? 'Click again to stop them' : 'Stop and remove them (Delete · Ctrl+Z undoes)'}${locked ? ` · ${locked} in a locked group are kept (Delete twice stops them too)` : ''}">${icon('trash', 14)}</button>`;
+  bar.innerHTML = `<span${again ? ' class="armed"' : ''}>${again ? `Delete again: also stops ${locked} locked` : `${selected.size} selected${locked ? ` · ${locked} locked` : ''}`}</span>
     <button data-sel="show" title="Show them side by side">${icon('grid', 14)}</button>
     ${stop}
     <button data-sel="clear" title="Clear selection (Esc)">${icon('x', 14)}</button>`;
@@ -66,15 +76,28 @@ $('#selbar').addEventListener('click', (e) => {
   else if (act === 'clear') clearSelection();
 });
 
-const dotState = (/** @type {Runtime | undefined} */ r) => (r?.attn ? 'attn' : r?.exited ? 'exited' : r?.unread ? 'unread' : r?.running ? 'running' : 'idle');
+// busy / done: only after a program reported work (Claude); `working` stays undefined for a shell, which stays running
+/** @param {Session} s */
+const dotState = (s, r = rt.get(s.id)) => (r?.attn ? 'attn' : asleep(s) ? 'asleep' : r?.exited ? 'exited' : r?.working ? 'busy'
+  : r?.running && r.working === false ? 'done' : r?.unread ? 'unread' : r?.running ? 'running' : 'idle');
 // What the status dot in front of a terminal means (its tooltip).
 const DOTS = {
   running: 'Running',
+  busy: 'Working',
+  done: 'Not working: finished or waiting for you',
   unread: 'New output since you last looked',
-  attn: 'Needs your attention: finished, or rang its bell',
+  attn: 'Needs your attention: just finished, or rang its bell',
   exited: 'Stopped: show it and press Enter to restart',
   idle: 'Not started yet: starts when you show it',
+  asleep: 'Asleep: stopped to free memory, continues its conversation when you show it',
 };
+// The status mark in front of a terminal (sidebar, go-to box): a shape per state, not only a color, so it also reads on
+// a group's glow.
+const dotHtml = (/** @type {keyof typeof DOTS} */ st) => `<span class="dot" title="${DOTS[st]}">${st === 'done' ? icon('check', 12) : st === 'asleep' ? icon('moon', 12) : ''}</span>`;
+// the tooltip of a terminal row: its name and what its program uses (memory.js)
+const rowTitle = (/** @type {Session} */ s) => { const m = rt.get(s.id)?.mem; return `${esc(label(s))}${s.tag ? ` · ${esc(s.tag)}` : ''}${m ? ` · ${bytes(m)}` : ''}${s.awake ? ' · kept awake' : ''}`; };
+// a terminal's label (`werkbank label`), next to its name in the sidebar and the go-to box
+const tagHtml = (/** @type {Session} */ s) => (s.tag ? `<span class="stag">${esc(s.tag)}</span>` : '');
 const hasSubgroups = (/** @type {Group} */ g) => L.groups.some((x) => x.parent === g.id);
 // a group row folds when there is something under it: terminals or subgroups
 const foldable = (/** @type {Group} */ g) => g.sessions.length > 0 || hasSubgroups(g);
@@ -87,11 +110,21 @@ function renderSide() {
     fold = g.collapsed && foldable(g) ? depth : Infinity;
     return true;
   });
-  groupsEl.innerHTML = rows.map(({ g, depth }) => {
+  // per depth: the top-most and the nearest color of the groups above, so a subgroup continues their glow
+  /** @type {(string | undefined)[]} */
+  const top = [];
+  /** @type {(string | undefined)[]} */
+  const near = [];
+  groupsEl.innerHTML = rows.map(({ g, depth }, i) => {
     const below = subtree(L.groups, g), all = below.flatMap((x) => x.sessions), locked = isLocked(L.groups, g);
+    const band = depth ? top[depth - 1] : undefined, color = g.color || (depth ? near[depth - 1] : undefined);
+    top[depth] = band || g.color;
+    near[depth] = color;
+    const next = rows[i + 1], joined = `${band ? ' joined-top' : ''}${next?.depth && top[next.depth - 1] ? ' joined-bottom' : ''}`;
+    const own = band && color !== band ? ' own' : '';
     return `
-    <div class="group${g.collapsed && foldable(g) ? ' collapsed' : ''}" data-g="${g.id}" style="--d:${depth}">
-      <div class="ghead${foldable(g) ? ' has' : ''}${all.some((s) => rt.get(s.id)?.attn) ? ' attn' : ''}" title="${esc(groupPath(L.groups, g))}${g.profile || g.cwd ? ` · new terminals: ${esc(groupProfile(g).name)}${g.cwd ? ` in ${esc(g.cwd)}` : ''}` : ''}"${g.color ? ` style="--gc:${g.color}"` : ''}>
+    <div class="group${g.collapsed && foldable(g) ? ' collapsed' : ''}${joined}${own}" data-g="${g.id}" style="--d:${depth}${color ? `;--gc:${color}` : ''}${band ? `;--tc:${band}` : ''}">
+      <div class="ghead${foldable(g) ? ' has' : ''}${all.some((s) => rt.get(s.id)?.attn) ? ' attn' : ''}" title="${esc(groupPath(L.groups, g))}${g.profile || g.cwd ? ` · new terminals: ${esc(groupProfile(g).name)}${g.cwd ? ` in ${esc(g.cwd)}` : ''}` : ''}">
         <span class="caret">${foldable(g) ? icon('chevron', 14) : ''}</span>${g.color ? `<i class="gdot" style="background:${g.color}"></i>` : ''}<span class="gname">${esc(g.name)}</span><span class="ginit">${esc((g.name.trim()[0] ?? '?').toUpperCase())}</span>
         ${g.locked ? `<span class="glock" title="Locked: this group, its subgroups and their terminals cannot be removed">${icon('lock', 13)}</span>` : ''}
         <span class="count">${all.length || ''}</span>
@@ -106,10 +139,10 @@ function renderSide() {
       </div>
       <div class="sessions">${g.sessions.map((s) => {
         const r = rt.get(s.id);
-        const st = dotState(r);
+        const st = dotState(s, r);
         const confirm = armed === s.id;
-        return `<div class="sess ${st}${inView.includes(s.id) ? ' visible' : ''}${s.id === L.active ? ' active' : ''}${confirm ? ' confirm' : ''}${selected.has(s.id) ? ' selected' : ''}" data-s="${s.id}" title="${esc(label(s))}"${s.color || g.color ? ` style="--sc:${s.color || g.color}"` : ''}>
-          <span class="dot" title="${DOTS[st]}"></span>${progIcon(s.profile, 15)}<span class="sname">${esc(label(s))}</span>${s.front ? `<span class="sfront" title="Comes to the front when done">${icon('bell', 12)}</span>` : ''}
+        return `<div class="sess ${st}${inView.includes(s.id) ? ' visible' : ''}${s.id === L.active ? ' active' : ''}${confirm ? ' confirm' : ''}${selected.has(s.id) ? ' selected' : ''}" data-s="${s.id}" title="${rowTitle(s)}"${s.color ? ` style="--sc:${s.color}"` : ''}>
+          ${dotHtml(st)}${progIcon(s.profile, 15)}<span class="sname">${esc(label(s))}</span>${tagHtml(s)}${s.front ? `<span class="sfront" title="Comes to the front when done">${icon('bell', 12)}</span>` : ''}
           ${locked ? '' : `<button data-act="close" class="${confirm ? 'armed' : ''}" title="${confirm ? 'Click again to stop' : 'Stop and remove terminal'}">${icon('trash', 14)}</button>`}</div>`;
       }).join('')}</div>
     </div>`;
@@ -150,33 +183,13 @@ groupsEl.addEventListener('click', (e) => {
   const g = gEl && L.groups.find((x) => x.id === gEl.dataset.g);
   if (!g) return; // every row and button lives in a group
   const actEl = closestEl(e.target, '[data-act]');
-  switch (actEl?.dataset.act) {
-    case 'close': {
-      const id = sess?.dataset.s;
-      if (!id) return;
-      if ((rt.get(id)?.running || rt.get(id)?.starting) && !confirmed(id)) return; // a stopped one goes on the first click
-      return removeSession(id);
-    }
-    case 'add': return addToGroup(g)(groupProfile(g), e, 1);
-    case 'tile': {
-      checkpoint(`show group ${g.name}`);
-      return showGrid(subtree(L.groups, g).flatMap((x) => x.sessions.map((s) => s.id)));
-    }
-    case 'subgroup': return newGroup(g);
-    case 'closeall': return confirmed(`g:${g.id}`) && closeGroup(g);
-    case 'delgroup':
-      if (isLocked(L.groups, g) || subtree(L.groups, g).length > 1 || g.sessions.length) return;
-      checkpoint(`delete group ${g.name}`);
-      L.groups = L.groups.filter((x) => x !== g);
-      renderSide();
-      return save();
-    case 'lock':
-      checkpoint(`${g.locked ? 'unlock' : 'lock'} ${g.name}`);
-      g.locked = !g.locked;
-      armed = null;
-      renderSide();
-      return save();
+  if (actEl?.dataset.act === 'close') {
+    const id = sess?.dataset.s;
+    if (!id) return;
+    if ((rt.get(id)?.running || rt.get(id)?.starting) && !confirmed(id)) return; // a stopped one goes on the first click
+    return removeSession(id);
   }
+  if (actEl?.dataset.act) return groupAct(g, actEl.dataset.act, e);
   // the group row folds open/closed, but only when there is something in it
   if (closestEl(e.target, '.ghead') && !actEl) {
     if (e.target instanceof HTMLInputElement) return; // typing a name
@@ -202,6 +215,40 @@ groupsEl.addEventListener('click', (e) => {
   clearSelection();
   show(id, false);
 });
+// What the buttons on a group row and its right-click menu do. Stopping running terminals takes a second click
+// (`confirmed`); the caller can tell by `armed` still holding the key ('g:' close all, 'd:' delete).
+/** @param {Group} g @param {string} act @param {MouseEvent} e */
+function groupAct(g, act, e) {
+  switch (act) {
+    case 'add': return addToGroup(g)(groupProfile(g), e, 1);
+    case 'tile': {
+      checkpoint(`show group ${g.name}`);
+      return showGrid(subtree(L.groups, g).flatMap((x) => x.sessions.map((s) => s.id)));
+    }
+    case 'subgroup': return newGroup(g);
+    case 'rename': {
+      const el = groupsEl.querySelector(`[data-g="${g.id}"] .gname`);
+      return el && rename(el, g);
+    }
+    case 'closeall': return confirmed(`g:${g.id}`) && closeGroup(g);
+    case 'delgroup': { // with its subgroups and terminals; one undo step brings it all back
+      const below = subtree(L.groups, g);
+      if (below.some((x) => isLocked(L.groups, x))) return;
+      if (below.some((x) => x.sessions.some((s) => rt.get(s.id)?.running || rt.get(s.id)?.starting)) && !confirmed(`d:${g.id}`)) return;
+      checkpoint(`delete group ${g.name}`);
+      for (const x of below) for (const s of x.sessions) drop(s.id);
+      L.groups = L.groups.filter((x) => !below.includes(x));
+      return renderView();
+    }
+    case 'lock':
+      checkpoint(`${g.locked ? 'unlock' : 'lock'} ${g.name}`);
+      g.locked = !g.locked;
+      armed = null;
+      renderSide();
+      return save();
+  }
+}
+
 /** @type {string | null} */
 let anchor = null;
 // the terminals in the order shown in the sidebar, skipping those of folded groups

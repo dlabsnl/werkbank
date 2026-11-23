@@ -25,10 +25,18 @@ interface Session {
   color?: string;
   /** named by hand: its program's title does not rename it */
   custom?: boolean;
+  /** the last title its program set (Claude Code: the conversation topic), its name while no program runs */
+  title?: string;
   /** its program has a conversation of its own to resume */
   resumable?: boolean;
   /** bring Werkbank to the front when it is done */
   front?: boolean;
+  /** asleep: its program was stopped to free memory and continues its conversation when shown (memory.js) */
+  asleep?: boolean;
+  /** never put to sleep (a loop or scheduled task runs in it that shows no process) */
+  awake?: boolean;
+  /** its label, set with `werkbank label` (e.g. a ticket number): shown next to its name; undo leaves it alone */
+  tag?: string;
 }
 
 interface Group {
@@ -74,6 +82,10 @@ interface Layout {
   sideMode?: 'open' | 'collapsed' | 'auto';
   startup?: 'shown' | 'all';
   copySelect?: boolean;
+  /** minutes a quiet, resumable terminal out of view runs before it sleeps (its program stops); 0 = never, unset = 60 */
+  sleepAfter?: number;
+  /** percent of the computer's memory Werkbank may use before waiting terminals sleep; 0 = no budget, unset = 25 */
+  memBudget?: number;
   notifySound?: boolean;
   notifyVolume?: number;
   notifyFlash?: boolean;
@@ -82,6 +94,34 @@ interface Layout {
   spots?: Record<string, Spot>;
   /** command line that opens a file link; empty = the editor Werkbank finds itself */
   editor?: string;
+  /** command line (no shell) started when a finished Claude terminal stays unseen while you are away; empty = off */
+  awayCommand?: string;
+  /** minutes a terminal waits unseen, and the PC gets no input, before the away command runs; unset = 10 */
+  awayAfter?: number;
+}
+
+/** Work `werkbank send` gave a terminal, for `werkbank wait` (handoff.js): while it is there, "done" only counts after this work. */
+interface Job {
+  /** when the text was typed and Enter pressed; unset while the program is still getting ready */
+  typedAt?: number;
+  /** the program began working after that */
+  started?: boolean;
+  /** nothing was typed, and why */
+  failed?: string;
+}
+
+/** What `werkbank wait` looks at (waitVerdict in handoff.js). */
+interface WaitInput {
+  /** its program reports when it works (Claude Code); others count as done when quiet */
+  reports: boolean;
+  asleep: boolean;
+  starting: boolean;
+  running: boolean;
+  exited: boolean;
+  working?: boolean;
+  idleSince?: number;
+  lastOutput?: number;
+  job?: Job;
 }
 
 /** A terminal while Werkbank runs (not saved): its xterm, pane and program state. */
@@ -98,13 +138,31 @@ interface Runtime {
   unread: boolean;
   /** needs your attention (bell, Claude done) */
   attn?: boolean;
+  /** since when, and the wait the away command already ran for (attention.js) */
+  attnAt?: number;
+  awayFor?: number;
+  /** what `werkbank send` typed last, until the work it started has ended */
+  job?: Job;
   restored?: boolean;
   resuming?: boolean;
   startedAt?: number;
   /** when start last switched between resume and fresh, so it does not loop */
   flippedAt?: number;
   /** the current start; an exit of an older one is ignored */
-  run?: object;
+  run?: { ended?: () => void };
+  /** the program put to sleep, until it has really ended (a resume before that is refused: session in use) */
+  dying?: Promise<unknown>;
+  /** when it last went quiet (done, waiting for you) and when you last typed in it: how long it has waited */
+  idleSince?: number;
+  inputAt?: number;
+  /** text typed after the last Enter: it would be lost, so the terminal does not sleep */
+  draft?: boolean;
+  /** bytes its program uses with what that started (memory.rs) */
+  mem?: number;
+  /** its program runs something it started later (a command in the background): it does not sleep */
+  busy?: boolean;
+  /** when it was last in view */
+  seenAt?: number;
   /** input typed while the program was starting */
   pending?: string[] | null;
   /** the last write to its program; the next one waits for it (writeTo) */
@@ -145,10 +203,16 @@ interface Commands {
     onExit: import('@tauri-apps/api/core').Channel<number | null>;
   }, void];
   has_conversation: [{ id: string }, boolean];
+  conversation_title: [{ id: string }, string | null];
+  conversation_answer: [{ id: string }, string | null];
+  search_conversations: [{ ids: string[]; query: string; replaces: boolean }, [string, string][]];
+  idle_seconds: [undefined, number];
+  away_run: [{ command: string[]; terminal: string; group: string; id: string; minutes: number }, void];
   launch_target: [undefined, string | null];
   write: [{ id: string; data: string }, void];
   resize: [{ id: string; cols: number; rows: number }, void];
   kill: [{ id: string }, void];
+  memory: [undefined, { total: number; ram: number; terminals: Record<string, { bytes: number; busy: boolean }> }];
 }
 
 /** Events from Rust (app.emit) and their payloads. */

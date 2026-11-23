@@ -1,11 +1,14 @@
-// Answers the `werkbank` command run inside a terminal (src-tauri/src/api.rs): list, open, send, close.
+// Answers the `werkbank` command run inside a terminal (src-tauri/src/api.rs): list, open, send, close, and for
+// handing work over: wait, read, search, label.
 
-const statusOf = (/** @type {string} */ id) => { const r = rt.get(id); return r?.exited ? 'exited' : r?.running ? 'running' : r?.starting ? 'starting' : 'idle'; };
+const statusOf = (/** @type {string} */ id) => { const r = rt.get(id), f = findSession(id); return f && asleep(f.s) ? 'asleep' : r?.exited ? 'exited' : r?.running ? 'running' : r?.starting ? 'starting' : 'idle'; };
 // The arguments come from any program that has the token, so each is checked before use.
 /** @param {Record<string, unknown>} a @param {string} k @returns {string} '' when not given */
 const argText = (a, k) => { const v = a[k] ?? ''; if (typeof v !== 'string') throw new Error(`${k} must be text`); return v; };
 /** @param {Record<string, unknown>} a @param {string} k */
 const argFlag = (a, k) => { const v = a[k] ?? false; if (typeof v !== 'boolean') throw new Error(`${k} takes no value`); return v; };
+/** @param {Record<string, unknown>} a @param {string} k @param {number} max @returns {number} 0 when not given */
+const argCount = (a, k, max) => { const v = a[k] ?? 0; if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > max) throw new Error(`${k} must be a whole number up to ${max}`); return v; };
 /** @param {Record<string, unknown>} a @returns {{ g: Group, s: Session }} the terminal named by `a.name` (name, title or id) */
 function findTerminal(a) {
   const q = argText(a, 'name'), k = q.toLowerCase();
@@ -25,6 +28,10 @@ const sendable = (/** @type {string} */ t) => Array.from(t.replace(/\r\n?/g, '\n
 /** @param {Session} s @param {string} text */
 async function typeInto(s, text, enter = true) {
   const r = runtime(s);
+  // set before anything else: from now on `werkbank wait` waits for this work, not for what was done before
+  /** @type {Job | undefined} */
+  const job = enter ? {} : undefined;
+  if (job) r.job = job;
   if (!r.running && !r.starting) start(s);
   // Claude sets its window title once its input box is up; text typed before that can get lost
   // shortcut: a Claude started with its title turned off waits the full 90 s, then nothing is typed
@@ -33,6 +40,8 @@ async function typeInto(s, text, enter = true) {
     if (rt.get(s.id) !== r) return; // removed in the meantime
     if (Date.now() - t0 > 90000 || r.exited) {
       r.term.write('\r\n\x1b[90m[werkbank send: the program did not get ready, nothing was typed]\x1b[0m\r\n');
+      if (job) job.failed = 'did not get ready: nothing of what was sent was typed';
+      log(`${s.name}: werkbank send typed nothing, the program did not get ready`);
       return;
     }
     await pause(250);
@@ -44,6 +53,8 @@ async function typeInto(s, text, enter = true) {
   if (!enter) return;
   await pause(200); // let the program take the paste in before Enter
   writeTo(r, s.id, '\r');
+  // typed while it was working: Claude takes it up in the same run of work
+  if (job) { job.typedAt = Date.now(); job.started = !!r.working; }
   // same as Enter typed by hand (terminal.js): the program now has a conversation, so a restart resumes it
   if (!s.resumable && profileOf(s)?.resume) { s.resumable = true; save(); }
   // evidence for the log when a prompt did not arrive (start() then begins fresh instead of resuming)
@@ -81,10 +92,32 @@ function listTerminals() {
   const shown = visible();
   return groupTree(L.groups).map(({ g }) => ({
     group: groupPath(L.groups, g), locked: isLocked(L.groups, g),
-    terminals: g.sessions.map((x) => ({ name: label(x), id: x.id, profile: x.profile, status: statusOf(x.id), visible: shown.includes(x.id) })),
+    terminals: g.sessions.map((x) => ({ name: label(x), id: x.id, profile: x.profile, status: statusOf(x.id), visible: shown.includes(x.id), label: x.tag ?? '' })),
   }));
 }
 
+// The Claude terminals whose conversation mentions `query` (what you and Claude said, any case), with the place:
+// the go-to box and `werkbank search`. Read in Rust, off the window's thread (pty.rs, transcript.rs).
+// `replaces`: this search takes the place of the go-to box's earlier one, which then ends early and finds nothing.
+/** @param {string} query @param {boolean} replaces @returns {Promise<{ s: Session, g: Group, snippet: string }[]>} */
+async function searchConversations(query, replaces) {
+  const ids = allSessions().filter((s) => isClaude(profileOf(s))).map((s) => s.id);
+  if (!ids.length) return [];
+  const hits = await invoke('search_conversations', { ids, query, replaces });
+  return hits.flatMap(([id, snippet]) => { const f = findSession(id); return f ? [{ ...f, snippet }] : []; });
+}
+// What is on a terminal's screen as text, without the empty lines at its end.
+/** @param {Runtime} r */
+function screenLines(r) {
+  const b = r.term.buffer.active, lines = [];
+  for (let i = 0; i < b.length; i++) lines.push(b.getLine(i)?.translateToString(true) ?? '');
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  return lines;
+}
+
+// These log their own line or none: `wait` asks twice a second, and what `read` and `search` answer and what `label`
+// is given is text from a terminal or a program, which never goes into the log (names only).
+const UNLOGGED = new Set(['list', 'wait', 'read', 'search', 'label']);
 /** @type {Record<string, (a: Record<string, unknown>) => unknown>} */
 const API = {
   list: listTerminals,
@@ -142,6 +175,54 @@ const API = {
     }, 300);
     return `closed "${was}"`;
   },
+  // werkbank wait: asked twice a second by the command (api.rs) until `done`; `code` is its exit code (handoff.js).
+  // An unknown terminal is an answer here, not an error: the command tells "closed meanwhile" from "never there".
+  wait: (a) => {
+    let f;
+    try { f = findTerminal(a); } catch (e) { return { done: true, code: 3, text: e instanceof Error ? e.message : String(e) }; }
+    const { s } = f, r = rt.get(s.id);
+    const v = waitVerdict({
+      reports: isClaude(profileOf(s)) || r?.working !== undefined, asleep: asleep(s), starting: !!r?.starting, running: !!r?.running,
+      exited: !!r?.exited, working: r?.working, idleSince: r?.idleSince, lastOutput: r?.lastOutput, job: r?.job,
+    }, Date.now());
+    return { ...v, id: s.id, name: printable(label(s)), text: printable(`"${label(s)}" ${v.text}`) };
+  },
+  // werkbank read: a Claude terminal's last answer from its saved conversation (text only), else the end of the screen
+  read: async (a) => {
+    const { s } = findTerminal(a), n = argCount(a, 'lines', 10000);
+    /** @type {string[]} */
+    let lines;
+    if (isClaude(profileOf(s))) {
+      const answer = await invoke('conversation_answer', { id: s.id });
+      if (answer === null) throw new Error(`"${label(s)}" has no answer to its last prompt yet`);
+      lines = answer.split('\n');
+      if (n) lines = lines.slice(-n);
+    } else {
+      const r = rt.get(s.id);
+      if (!r) throw new Error(`"${label(s)}" has nothing on its screen: it has not been started`);
+      lines = screenLines(r).slice(-(n || 40));
+    }
+    log(`werkbank read: "${label(s)}"`);
+    return printable(lines.join('\n')); // a screen or an answer can hold escape codes: they must not reach the asker's terminal
+  },
+  // werkbank search: the terminals whose Claude conversation mentions the text
+  search: async (a) => {
+    const text = argText(a, 'text').trim();
+    if (text.length < 2) throw new Error('search needs at least two characters');
+    const hits = await searchConversations(text, false);
+    log(`werkbank search: ${hits.length} terminals`);
+    return hits.map(({ s, g, snippet }) => ({ name: printable(label(s)), id: s.id, group: groupPath(L.groups, g), snippet: printable(snippet) }));
+  },
+  // werkbank label: a short label next to a terminal's name (a ticket number); an empty text takes it off.
+  // No undo step: a program sets it, often, and Ctrl+Z is for what you did (base.js keeps it out of undo).
+  label: (a) => {
+    const { s } = findTerminal(a), tag = cleanTag(argText(a, 'text'));
+    if (tag) s.tag = tag; else delete s.tag;
+    renderSide();
+    save();
+    log(`werkbank label: "${label(s)}" ${tag ? 'got a label' : 'has no label now'}`); // the label is a program's text: not in the log
+    return tag ? `"${label(s)}" is labeled ${tag}` : `"${label(s)}" has no label now`;
+  },
 };
 // A clicked Windows notification (see notify.rs) asks to show its terminal.
 listen('show-terminal', ({ payload: id }) => { if (findSession(id)) reveal(id); });
@@ -153,7 +234,7 @@ listen('api-request', async ({ payload: { id, cmd, args } }) => {
     if (!Object.hasOwn(API, cmd)) throw new Error(`unknown command "${cmd}" (see: werkbank help)`);
     const result = await API[cmd](args);
     reply = { ok: true, result };
-    if (cmd !== 'list') log(`werkbank ${cmd}: ${result}`); // the result names the terminal, not the sent text
+    if (!UNLOGGED.has(cmd)) log(`werkbank ${cmd}: ${result}`); // the result names the terminal, not the sent text
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
     reply = { ok: false, error };
